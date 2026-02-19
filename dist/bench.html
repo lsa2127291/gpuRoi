@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MPR Slice Benchmark - 80 Meshes</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', monospace;
+      background: #1a1a2e;
+      color: #eee;
+      padding: 24px;
+      min-height: 100vh;
+    }
+    h1 { font-size: 1.4rem; margin-bottom: 8px; color: #e94560; }
+    .subtitle { color: #888; font-size: 0.85rem; margin-bottom: 20px; }
+    .controls {
+      display: flex; gap: 12px; align-items: center;
+      margin-bottom: 16px; flex-wrap: wrap;
+    }
+    button {
+      padding: 8px 20px; border: 2px solid #e94560;
+      background: transparent; color: #e94560;
+      border-radius: 6px; cursor: pointer; font-size: 0.9rem;
+      transition: all 0.2s;
+    }
+    button:hover { background: #e94560; color: #fff; }
+    button:disabled { opacity: 0.4; cursor: not-allowed; }
+    .slider-group {
+      display: flex; align-items: center; gap: 8px; margin-bottom: 16px;
+    }
+    .slider-group label { font-size: 0.9rem; min-width: 60px; }
+    input[type="range"] { width: 300px; accent-color: #e94560; }
+    .slider-group span {
+      min-width: 60px; text-align: right; font-variant-numeric: tabular-nums;
+    }
+    #log {
+      background: #0f0f23; border: 1px solid #333; border-radius: 8px;
+      padding: 16px; font-size: 0.8rem; line-height: 1.6;
+      max-height: 400px; overflow-y: auto; white-space: pre-wrap;
+      margin-bottom: 16px;
+    }
+    .stat { color: #4ecdc4; }
+    .warn { color: #f9a825; }
+    .err { color: #e94560; }
+    canvas {
+      border: 1px solid #333; border-radius: 8px; background: #0f0f23;
+    }
+    .canvas-row {
+      display: flex; gap: 16px; align-items: flex-start; flex-wrap: wrap;
+    }
+    .canvas-card {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .canvas-title {
+      font-size: 0.8rem;
+      color: #aaa;
+    }
+  </style>
+  <script type="module" crossorigin src="/assets/bench-Bcq5XcUG.js"></script>
+  <link rel="modulepreload" crossorigin href="/assets/index-DrIJp-T2.js">
+</head>
+<body>
+  <h1>MPR Slice Benchmark</h1>
+  <p class="subtitle" id="status">准备中...</p>
+
+  <div class="controls">
+    <button id="btn-generate">生成 80 个 Mesh</button>
+    <button id="btn-run" disabled>运行切面测试</button>
+    <button id="btn-axial">Axial</button>
+    <button id="btn-sagittal">Sagittal</button>
+    <button id="btn-coronal">Coronal</button>
+  </div>
+
+  <div class="slider-group">
+    <label>Anchor:</label>
+    <input type="range" id="slider" min="-80" max="80" value="0" step="1" />
+    <span id="slider-value">0 mm</span>
+  </div>
+
+  <div id="log"></div>
+
+  <div class="canvas-row">
+    <div class="canvas-card">
+      <span class="canvas-title">Batch Bitmap Path (New)</span>
+      <canvas id="canvas-bitmap" width="512" height="512"></canvas>
+    </div>
+    <div class="canvas-card">
+      <span class="canvas-title">Single Segment Path (Old)</span>
+      <canvas id="canvas-segment" width="512" height="512"></canvas>
+    </div>
+    <div class="canvas-card">
+      <span class="canvas-title">Display Diff (Mask Compare)</span>
+      <canvas id="canvas-diff" width="512" height="512"></canvas>
+    </div>
+  </div>
+
+</body>
+</html>
