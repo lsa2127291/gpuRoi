@@ -55,6 +55,32 @@
       text-align: right;
       font-variant-numeric: tabular-nums;
     }
+    .brush-panel {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 14px;
+      flex-wrap: wrap;
+      justify-content: center;
+    }
+    .brush-panel label {
+      font-size: 0.9rem;
+      color: #d9d9e6;
+    }
+    .brush-panel input[type="range"] {
+      width: 180px;
+      accent-color: #2cd4a0;
+    }
+    .brush-panel .mode-btn.active {
+      background: #2cd4a0;
+      border-color: #2cd4a0;
+      color: #111;
+    }
+    .brush-panel .mode-btn.erase.active {
+      background: #f05454;
+      border-color: #f05454;
+      color: #fff;
+    }
     canvas {
       border: 1px solid #333;
       border-radius: 8px;
@@ -91,8 +117,8 @@
       text-align: center;
     }
   </style>
-  <script type="module" crossorigin src="/assets/main-DMZ-qwju.js"></script>
-  <link rel="modulepreload" crossorigin href="/assets/index-DrIJp-T2.js">
+  <script type="module" crossorigin src="/assets/main-Bra6gE2N.js"></script>
+  <link rel="modulepreload" crossorigin href="/assets/index-77LIymxU.js">
 </head>
 <body>
   <h1>MPR Slice Renderer Demo</h1>
@@ -123,6 +149,15 @@
     <label>Anchor:</label>
     <input type="range" id="slider" min="-60" max="60" value="0" step="1" />
     <span id="slider-value">0 mm</span>
+  </div>
+
+  <div class="brush-panel" id="brush-panel">
+    <label>Brush:</label>
+    <button id="btn-brush-add" class="mode-btn active">Add</button>
+    <button id="btn-brush-erase" class="mode-btn erase">Erase</button>
+    <label for="brush-radius">Radius</label>
+    <input type="range" id="brush-radius" min="1" max="50" value="6" step="0.5" />
+    <span id="brush-radius-value">6 mm</span>
   </div>
 
   <canvas id="canvas" width="512" height="512"></canvas>

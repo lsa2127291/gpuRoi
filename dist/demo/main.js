@@ -1,0 +1,353 @@
+import { createBatchSlicer } from '@/core/create-slicer';
+import { createTestCube } from '@/core/test-data';
+import { buildLocalBasis, projectPointTo2D } from '@/core/projection';
+import { normalize } from '@/core/vec3';
+import { BrushOverlayRenderer } from '@/renderer/brush-overlay-renderer';
+import { MultiViewManager } from '@/renderer/multi-view-manager';
+import { createBrushEngine2DWithClipper2Wasm } from '@/core/brush/brush-engine-2d';
+import { ApproxBrushEngine3D } from '@/core/brush/brush-engine-3d';
+import { createBrushSession } from '@/core/brush/brush-session';
+import { MPR_VIEWS } from '@/types';
+const SCALE = 3;
+const DEMO_MESH_COLOR = [0.91, 0.27, 0.38, 1];
+const DEFAULT_BRUSH_RADIUS_MM = 6;
+function meshColorToCss(color) {
+    const r = Math.round(Math.max(0, Math.min(1, color[0])) * 255);
+    const g = Math.round(Math.max(0, Math.min(1, color[1])) * 255);
+    const b = Math.round(Math.max(0, Math.min(1, color[2])) * 255);
+    return `rgb(${r}, ${g}, ${b})`;
+}
+const ACTIVE_MESH_COLOR_CSS = meshColorToCss(DEMO_MESH_COLOR);
+const canvas = document.getElementById('canvas');
+const slider = document.getElementById('slider');
+const sliderValue = document.getElementById('slider-value');
+const backendLabel = document.getElementById('backend-label');
+const btnAxial = document.getElementById('btn-axial');
+const btnSagittal = document.getElementById('btn-sagittal');
+const btnCoronal = document.getElementById('btn-coronal');
+const btnCustom = document.getElementById('btn-custom');
+const customPanel = document.getElementById('custom-panel');
+const nxInput = document.getElementById('nx');
+const nyInput = document.getElementById('ny');
+const nzInput = document.getElementById('nz');
+const uxInput = document.getElementById('ux');
+const uyInput = document.getElementById('uy');
+const uzInput = document.getElementById('uz');
+const brushModeAddBtn = document.getElementById('btn-brush-add');
+const brushModeEraseBtn = document.getElementById('btn-brush-erase');
+const brushRadiusInput = document.getElementById('brush-radius');
+const brushRadiusLabel = document.getElementById('brush-radius-value');
+let currentView = 'Axial';
+let updateToken = 0;
+let navigationLocked = false;
+let pointerDown = false;
+let lastPointerLocalMm = null;
+let currentMesh = createTestCube();
+let currentMeshId = 'mesh-0';
+let currentCamera = MPR_VIEWS[currentView];
+let currentAnchor = [0, 0, 0];
+let brushMode = 'add';
+let brushRadiusMm = Number(brushRadiusInput.value) || DEFAULT_BRUSH_RADIUS_MM;
+brushRadiusLabel.textContent = `${brushRadiusMm} mm`;
+const overlayRenderer = new BrushOverlayRenderer(canvas, {
+    scale: SCALE,
+    activeColor: ACTIVE_MESH_COLOR_CSS,
+    brushColor: ACTIVE_MESH_COLOR_CSS,
+    showBrushTrail: false,
+    activeLineWidthPx: 2,
+});
+const commitEngine = new ApproxBrushEngine3D({
+    displacementScaleMm: 0.35,
+    falloffMm: 0.35,
+    idPrefix: 'demo-brush',
+});
+async function createDemoPreviewEngine() {
+    return createBrushEngine2DWithClipper2Wasm({
+        brushContourPoints: 40,
+    });
+}
+function getCustomCamera() {
+    const normalVec = normalize([
+        Number(nxInput.value) || 0,
+        Number(nyInput.value) || 0,
+        Number(nzInput.value) || 0,
+    ]);
+    const viewUpVec = normalize([
+        Number(uxInput.value) || 0,
+        Number(uyInput.value) || 0,
+        Number(uzInput.value) || 1,
+    ]);
+    return { viewPlaneNormal: normalVec, viewUp: viewUpVec };
+}
+function getCurrentCamera() {
+    if (currentView === 'Custom')
+        return getCustomCamera();
+    return MPR_VIEWS[currentView];
+}
+function getAnchor(camera, offset) {
+    const n = camera.viewPlaneNormal;
+    return [-n[0] * offset, -n[1] * offset, -n[2] * offset];
+}
+function toBrushSegments(segments3D, camera, anchor) {
+    const basis = buildLocalBasis(camera.viewPlaneNormal, camera.viewUp);
+    return segments3D.map((seg) => {
+        const a2 = projectPointTo2D(seg.start, anchor, basis);
+        const b2 = projectPointTo2D(seg.end, anchor, basis);
+        return {
+            a: { x: a2[0], y: a2[1] },
+            b: { x: b2[0], y: b2[1] },
+        };
+    });
+}
+function updateBrushButtons() {
+    brushModeAddBtn.classList.toggle('active', brushMode === 'add');
+    brushModeEraseBtn.classList.toggle('active', brushMode === 'erase');
+}
+function setNavigationLock(locked) {
+    navigationLocked = locked;
+    slider.disabled = locked;
+    btnAxial.disabled = locked;
+    btnSagittal.disabled = locked;
+    btnCoronal.disabled = locked;
+    btnCustom.disabled = locked;
+    nxInput.disabled = locked;
+    nyInput.disabled = locked;
+    nzInput.disabled = locked;
+    uxInput.disabled = locked;
+    uyInput.disabled = locked;
+    uzInput.disabled = locked;
+}
+function canvasToLocalMm(event) {
+    const rect = canvas.getBoundingClientRect();
+    const xPx = event.clientX - rect.left;
+    const yPx = event.clientY - rect.top;
+    return {
+        x: (xPx - canvas.width * 0.5) / SCALE,
+        y: (canvas.height * 0.5 - yPx) / SCALE,
+    };
+}
+async function main() {
+    const batchSlicer = await createBatchSlicer();
+    if (!batchSlicer) {
+        backendLabel.textContent = '后端: ❌ GPU Bitmap 不可用（已禁用 fallback）';
+        throw new Error('BatchGPUSlicer initialization failed: fallback renderer is disabled');
+    }
+    const activeSlicer = batchSlicer;
+    const multiViewManager = new MultiViewManager();
+    backendLabel.textContent = '后端: 🟢 GPU Bitmap (WebGPU) + Brush Session';
+    await activeSlicer.initBatch([currentMesh], [DEMO_MESH_COLOR]);
+    const previewEngine = await createDemoPreviewEngine();
+    const brushSession = createBrushSession([], {
+        previewEngine,
+        commitEngine,
+        createCommitInput: () => {
+            const basis = buildLocalBasis(currentCamera.viewPlaneNormal, currentCamera.viewUp);
+            return {
+                meshId: currentMeshId,
+                mesh: currentMesh,
+                slicePlane: {
+                    normal: [...currentCamera.viewPlaneNormal],
+                    anchor: [...currentAnchor],
+                    xAxis: basis.xAxis,
+                    yAxis: basis.yAxis,
+                },
+            };
+        },
+        requestReslice: async () => {
+            const seg3d = await activeSlicer.sliceBatchFlat(currentCamera.viewPlaneNormal, currentAnchor);
+            return toBrushSegments(seg3d, currentCamera, currentAnchor);
+        },
+        onCommitFail: (error) => {
+            console.error('Brush commit failed:', error);
+        },
+    });
+    multiViewManager.registerView({
+        id: 'main',
+        refresh: async () => {
+            await update();
+        },
+    });
+    async function update() {
+        if (navigationLocked)
+            return;
+        const token = ++updateToken;
+        const offset = Number(slider.value);
+        sliderValue.textContent = `${offset} mm`;
+        currentCamera = getCurrentCamera();
+        currentAnchor = getAnchor(currentCamera, offset);
+        try {
+            const segments3D = await activeSlicer.sliceBatchFlat(currentCamera.viewPlaneNormal, currentAnchor);
+            if (token !== updateToken)
+                return;
+            const activeSegments = toBrushSegments(segments3D, currentCamera, currentAnchor);
+            brushSession.setBaseSegments(activeSegments);
+            overlayRenderer.renderCommittedActive(activeSegments);
+            if (!pointerDown && lastPointerLocalMm) {
+                overlayRenderer.renderCursor(lastPointerLocalMm, brushRadiusMm, brushMode);
+            }
+        }
+        catch (err) {
+            console.error('Brush path update failed:', err);
+        }
+    }
+    const allButtons = [btnAxial, btnSagittal, btnCoronal, btnCustom];
+    const viewNames = ['Axial', 'Sagittal', 'Coronal', 'Custom'];
+    function switchView(viewName) {
+        if (navigationLocked)
+            return;
+        currentView = viewName;
+        allButtons.forEach((btn, i) => {
+            btn.classList.toggle('active', viewNames[i] === viewName);
+        });
+        customPanel.style.display = viewName === 'Custom' ? 'flex' : 'none';
+        if (brushSession) {
+            brushSession.invalidate('cameraRotate');
+        }
+        void update();
+    }
+    async function commitCurrentStroke() {
+        if (!brushSession || brushSession.currentState !== 'drawing')
+            return;
+        try {
+            const commit = await brushSession.endStroke();
+            currentMesh = commit.mesh;
+            currentMeshId = commit.newMeshId;
+            await activeSlicer.updateMesh(0, currentMesh);
+            await multiViewManager.refreshOtherViews('main', 'meshUpdated');
+            await update();
+        }
+        catch (error) {
+            console.error('Commit stroke failed:', error);
+            overlayRenderer.renderCommittedActive(brushSession.getCurrentSegments());
+        }
+        finally {
+            setNavigationLock(false);
+        }
+    }
+    btnAxial.addEventListener('click', () => switchView('Axial'));
+    btnSagittal.addEventListener('click', () => switchView('Sagittal'));
+    btnCoronal.addEventListener('click', () => switchView('Coronal'));
+    btnCustom.addEventListener('click', () => switchView('Custom'));
+    slider.addEventListener('input', () => {
+        if (navigationLocked)
+            return;
+        if (brushSession) {
+            brushSession.invalidate('anchorScroll');
+        }
+        void update();
+    });
+    for (const input of [nxInput, nyInput, nzInput, uxInput, uyInput, uzInput]) {
+        input.addEventListener('input', () => {
+            if (navigationLocked)
+                return;
+            if (currentView === 'Custom') {
+                if (brushSession) {
+                    brushSession.invalidate('cameraRotate');
+                }
+                void update();
+            }
+        });
+    }
+    brushModeAddBtn.addEventListener('click', () => {
+        if (navigationLocked)
+            return;
+        brushMode = 'add';
+        updateBrushButtons();
+        if (lastPointerLocalMm && brushSession) {
+            overlayRenderer.renderCommittedActive(brushSession.getCurrentSegments());
+            overlayRenderer.renderCursor(lastPointerLocalMm, brushRadiusMm, brushMode);
+        }
+    });
+    brushModeEraseBtn.addEventListener('click', () => {
+        if (navigationLocked)
+            return;
+        brushMode = 'erase';
+        updateBrushButtons();
+        if (lastPointerLocalMm && brushSession) {
+            overlayRenderer.renderCommittedActive(brushSession.getCurrentSegments());
+            overlayRenderer.renderCursor(lastPointerLocalMm, brushRadiusMm, brushMode);
+        }
+    });
+    brushRadiusInput.addEventListener('input', () => {
+        brushRadiusMm = Math.max(0.1, Number(brushRadiusInput.value) || DEFAULT_BRUSH_RADIUS_MM);
+        brushRadiusLabel.textContent = `${brushRadiusMm} mm`;
+        if (lastPointerLocalMm && brushSession) {
+            overlayRenderer.renderCommittedActive(brushSession.getCurrentSegments());
+            overlayRenderer.renderCursor(lastPointerLocalMm, brushRadiusMm, brushMode);
+        }
+    });
+    canvas.addEventListener('mousedown', (event) => {
+        if (!brushSession)
+            return;
+        if (brushSession.currentState !== 'idle')
+            return;
+        pointerDown = true;
+        const localPoint = canvasToLocalMm(event);
+        lastPointerLocalMm = localPoint;
+        try {
+            brushSession.beginStroke(localPoint, brushRadiusMm, brushMode);
+            const preview = brushSession.appendPoint(localPoint);
+            if (preview) {
+                overlayRenderer.renderPreview(preview.nextSegments, preview.brushPolygon2D ?? [], brushMode);
+            }
+            overlayRenderer.renderCursor(localPoint, brushRadiusMm, brushMode);
+            setNavigationLock(true);
+        }
+        catch (err) {
+            pointerDown = false;
+            console.error('Begin stroke failed:', err);
+        }
+    });
+    canvas.addEventListener('pointermove', (event) => {
+        if (!brushSession)
+            return;
+        const localPoint = canvasToLocalMm(event);
+        lastPointerLocalMm = localPoint;
+        if (brushSession.currentState === 'drawing' && pointerDown) {
+            // Use coalesced events for higher-resolution sampling during strokes
+            const coalescedEvents = event.getCoalescedEvents?.() ?? [];
+            let preview = null;
+            if (coalescedEvents.length > 1) {
+                for (const ce of coalescedEvents) {
+                    preview = brushSession.appendPoint(canvasToLocalMm(ce));
+                }
+            }
+            else {
+                preview = brushSession.appendPoint(localPoint);
+            }
+            if (preview) {
+                overlayRenderer.renderPreview(preview.nextSegments, preview.brushPolygon2D ?? [], brushMode);
+            }
+            overlayRenderer.renderCursor(localPoint, brushRadiusMm, brushMode);
+            return;
+        }
+        overlayRenderer.renderCommittedActive(brushSession.getCurrentSegments());
+        overlayRenderer.renderCursor(localPoint, brushRadiusMm, brushMode);
+    });
+    window.addEventListener('mouseup', () => {
+        if (!brushSession)
+            return;
+        if (!pointerDown)
+            return;
+        pointerDown = false;
+        void commitCurrentStroke();
+    });
+    window.addEventListener('keydown', (event) => {
+        if (!brushSession)
+            return;
+        if (event.key !== 'Escape')
+            return;
+        if (brushSession.currentState === 'drawing') {
+            brushSession.cancelStroke();
+            overlayRenderer.renderCommittedActive(brushSession.getCurrentSegments());
+            setNavigationLock(false);
+            pointerDown = false;
+        }
+    });
+    updateBrushButtons();
+    await update();
+}
+void main().catch((error) => {
+    console.error('Demo initialization failed:', error);
+});
+//# sourceMappingURL=main.js.map

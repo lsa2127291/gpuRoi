@@ -5,6 +5,9 @@ export interface BatchMeshSlicer {
   /** 批量初始化：上传所有 mesh 数据，按 chunk 拆分 */
   initBatch(meshes: MeshData[], colors?: MeshColor[]): Promise<void>
 
+  /** 更新单个 mesh（默认可回退到全量重建） */
+  updateMesh(meshIndex: number, mesh: MeshData): Promise<void>
+
   /** 批量切割：对所有 mesh 执行切面，返回每个 mesh 的线段数组 */
   sliceBatch(normal: Vec3, anchor: Vec3): Promise<Segment3D[][]>
 

@@ -6,9 +6,34 @@ export { createSlicer, createBatchSlicer } from './core/create-slicer'
 export { GPUSlicer } from './core/gpu-slicer'
 export { CPUSlicer } from './core/cpu-slicer'
 export { BatchGPUSlicer } from './core/batch-gpu-slicer'
+export {
+  createBrushEngine2D,
+  createBrushEngine2DWithClipper2Wasm,
+  DefaultBrushEngine2D,
+} from './core/brush/brush-engine-2d'
+export { createClipper2WasmBrushAdapter } from './core/brush/clipper2-wasm-adapter'
+export { createBrushEngine3D, ApproxBrushEngine3D } from './core/brush/brush-engine-3d'
+export { createBrushSession, DefaultBrushSession } from './core/brush/brush-session'
+export { CanvasWebGPULineRenderer } from './core/gpu/webgpu-line-renderer'
 export { planChunks } from './core/chunk-planner'
 export { getGPUDevice, isWebGPUAvailable } from './core/gpu-device'
+export { BrushOverlayRenderer } from './renderer/brush-overlay-renderer'
+export { MultiViewManager } from './renderer/multi-view-manager'
 export type { MeshSlicer } from './core/slicer-interface'
 export type { BatchMeshSlicer } from './core/batch-slicer-interface'
+export type { BrushEngine2D } from './core/brush/brush-engine-2d'
+export type { BrushEngine3D } from './core/brush/brush-engine-3d'
+export type { BrushSession } from './core/brush/brush-session'
+export type { BrushClipper2D } from './core/brush/clipper2-wasm-adapter'
+export type {
+  BrushMode,
+  BrushStroke,
+  Segment2D as BrushSegment2D,
+  PreviewInput,
+  PreviewOutput,
+  CommitInput,
+  CommitOutput,
+  BrushSessionState,
+} from './core/brush/brush-types'
 export * from './core/vec3'
 export * from './types'

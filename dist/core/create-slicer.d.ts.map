@@ -1,0 +1,1 @@
+{"version":3,"file":"create-slicer.d.ts","sourceRoot":"","sources":["../../src/core/create-slicer.ts"],"names":[],"mappings":"AAAA,OAAO,KAAK,EAAE,UAAU,EAAE,MAAM,oBAAoB,CAAA;AACpD,OAAO,KAAK,EAAE,eAAe,EAAE,MAAM,0BAA0B,CAAA;AAM/D;;;GAGG;AACH,wBAAsB,YAAY,IAAI,OAAO,CAAC,UAAU,CAAC,CAMxD;AAED;;;GAGG;AACH,wBAAsB,iBAAiB,IAAI,OAAO,CAAC,eAAe,GAAG,IAAI,CAAC,CAMzE"}

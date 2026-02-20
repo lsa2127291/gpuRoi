@@ -129,6 +129,19 @@ function cloneBitmapOptions(options: SliceBitmapOptions): SliceBitmapOptions {
   }
 }
 
+function cloneMeshData(mesh: MeshData): MeshData {
+  return {
+    vertices: new Float32Array(mesh.vertices),
+    indices: new Uint32Array(mesh.indices),
+    normals: mesh.normals ? new Float32Array(mesh.normals) : undefined,
+  }
+}
+
+function cloneMeshColors(colors?: MeshColor[]): MeshColor[] | undefined {
+  if (!colors) return undefined
+  return colors.map((color) => [color[0], color[1], color[2], color[3]])
+}
+
 export class BatchGPUSlicer implements BatchMeshSlicer {
   readonly backend = 'gpu' as const
 
@@ -160,6 +173,8 @@ export class BatchGPUSlicer implements BatchMeshSlicer {
   private bitmapRequestSeq = 0
   private pendingBitmapRequest: PendingBitmapRequest | null = null
   private disposed = false
+  private sourceMeshes: MeshData[] = []
+  private sourceColors: MeshColor[] | undefined
 
   constructor(device: GPUDevice) {
     this.device = device
@@ -188,6 +203,8 @@ export class BatchGPUSlicer implements BatchMeshSlicer {
     }
 
     this.meshCount = meshes.length
+    this.sourceMeshes = meshes.map(cloneMeshData)
+    this.sourceColors = cloneMeshColors(colors)
 
     this.meshColorBuffer?.destroy()
     const colorData = buildColorData(this.meshCount, colors)
@@ -207,6 +224,19 @@ export class BatchGPUSlicer implements BatchMeshSlicer {
     for (const chunk of chunks) {
       this.chunkGPUs.push(this.createChunkGPU(chunk))
     }
+  }
+
+  async updateMesh(meshIndex: number, mesh: MeshData): Promise<void> {
+    if (this.disposed) {
+      throw new Error('BatchGPUSlicer has been disposed')
+    }
+
+    if (meshIndex < 0 || meshIndex >= this.sourceMeshes.length) {
+      throw new Error(`meshIndex out of range: ${meshIndex}`)
+    }
+
+    this.sourceMeshes[meshIndex] = cloneMeshData(mesh)
+    await this.initBatch(this.sourceMeshes, this.sourceColors)
   }
 
   async sliceBatch(normal: Vec3, anchor: Vec3): Promise<Segment3D[][]> {
@@ -313,6 +343,8 @@ export class BatchGPUSlicer implements BatchMeshSlicer {
     this.outputContext = null
     this.outputCanvas = null
     this.meshCount = 0
+    this.sourceMeshes = []
+    this.sourceColors = undefined
   }
 
   private async runBitmapRenderLoop(): Promise<void> {
