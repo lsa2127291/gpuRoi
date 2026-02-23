@@ -5,7 +5,7 @@ import { normalize } from '@/core/vec3'
 import { BrushOverlayRenderer } from '@/renderer/brush-overlay-renderer'
 import { MultiViewManager } from '@/renderer/multi-view-manager'
 import { createBrushEngine2DWithClipper2Wasm } from '@/core/brush/brush-engine-2d'
-import { ApproxBrushEngine3D } from '@/core/brush/brush-engine-3d'
+import { createBrushEngine3D } from '@/core/brush/brush-engine-3d'
 import { createBrushSession } from '@/core/brush/brush-session'
 import { MPR_VIEWS } from '@/types'
 import type { MeshColor, CameraData, Vec3, Segment3D } from '@/types'
@@ -70,9 +70,10 @@ const overlayRenderer = new BrushOverlayRenderer(canvas, {
   activeLineWidthPx: 2,
 })
 
-const commitEngine = new ApproxBrushEngine3D({
-  displacementScaleMm: 0.35,
-  falloffMm: 0.35,
+const commitEngine = createBrushEngine3D({
+  backend: 'manifold',
+  brushContourPoints: 40,
+  cutterDepthPaddingMm: 2,
   idPrefix: 'demo-brush',
 })
 
@@ -346,12 +347,16 @@ async function main() {
       // Use coalesced events for higher-resolution sampling during strokes
       const coalescedEvents = event.getCoalescedEvents?.() ?? []
       let preview: ReturnType<typeof brushSession.appendPoint> = null
-      if (coalescedEvents.length > 1) {
-        for (const ce of coalescedEvents) {
-          preview = brushSession.appendPoint(canvasToLocalMm(ce))
+      for (const ce of coalescedEvents) {
+        const coalescedPreview = brushSession.appendPoint(canvasToLocalMm(ce))
+        if (coalescedPreview) {
+          preview = coalescedPreview
         }
-      } else {
-        preview = brushSession.appendPoint(localPoint)
+      }
+      // Always include the dispatch event's point to avoid losing the tail sample.
+      const currentPreview = brushSession.appendPoint(localPoint)
+      if (currentPreview) {
+        preview = currentPreview
       }
       if (preview) {
         overlayRenderer.renderPreview(
@@ -368,8 +373,22 @@ async function main() {
     overlayRenderer.renderCursor(localPoint, brushRadiusMm, brushMode)
   })
 
-  window.addEventListener('mouseup', () => {
+  window.addEventListener('mouseup', (event) => {
     if (!pointerDown) return
+
+    if (brushSession.currentState === 'drawing') {
+      const localPoint = canvasToLocalMm(event)
+      lastPointerLocalMm = localPoint
+      const preview = brushSession.appendPoint(localPoint)
+      if (preview) {
+        overlayRenderer.renderPreview(
+          preview.nextSegments,
+          preview.brushPolygon2D ?? [],
+          brushMode,
+        )
+      }
+      overlayRenderer.renderCursor(localPoint, brushRadiusMm, brushMode)
+    }
 
     pointerDown = false
     void commitCurrentStroke()

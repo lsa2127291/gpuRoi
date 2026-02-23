@@ -20,6 +20,9 @@
 - 该 wasm 在 Node 环境直接初始化会触发 `fetch(file://...)` 问题；浏览器/Vite 构建环境可正常打包与加载。
 - 通过新增 `clipper2-wasm-adapter`，已将 Clipper2 用于轨迹膨胀（`InflatePathsD`）与 2D 布尔（`add=Union`，`erase=Difference`）。
 - demo 侧已改为优先初始化 Clipper2 预览引擎，失败时自动回退纯 TS 预览引擎。
+- `manifold-3d` npm 包可通过 Emscripten WASM 在 Node 侧直接 `Module().setup()` 初始化；浏览器打包场景可通过 `manifold.wasm?url` 定位资产。
+- 用 `Manifold.ofMesh` + `CrossSection.compose(...).extrude(...).transform(...)` 可直接把 2D 笔刷轮廓提升为 3D cutter，并执行 `add/subtract` 布尔。
+- Manifold 输出 `Mesh.vertProperties` 可能携带 >3 维属性，需要按 `numProp` 提取前 3 维回写 `MeshData` 顶点。
 
 ## Technical Decisions
 | Decision | Rationale |
@@ -32,6 +35,7 @@
 | 3D commit 采用可替换的近似形变引擎 `ApproxBrushEngine3D` | 在无 Manifold 时保持 API 与状态机闭环 |
 | Clipper2 接入采用“适配层注入 + fallback” | 避免 wasm 初始化失败直接中断交互 |
 | `add/erase` 分别使用 Clipper2 `Union/Difference`，并保留 fallback | 统一布尔引擎语义，同时降低 wasm 异常的可用性风险 |
+| 3D 提交默认后端切换为 `manifold-3d`，保留 `backend: 'approx'` 显式回退 | 既满足“底层用 manifold”，又不破坏历史调用面 |
 
 ## Issues Encountered
 | Issue | Resolution |
@@ -39,6 +43,8 @@
 | planning skill 的默认脚本路径指向 `~/.codex/skills`，本机安装在项目内 | 使用项目相对路径执行脚本 |
 | `npm install clipper2-wasm` 在沙箱中网络连接被拒绝（EPERM） | 提权安装后成功 |
 | 包声明缺失导致 TS 无法静态解析入口 | 在适配层中直接动态导入 ESM 产物并做窄类型封装 |
+| `npm install manifold-3d` 在沙箱中网络连接被拒绝（EPERM） | 提权安装后成功 |
+| `npm run build` 报错来自 `src/core/brush/brush-example.ts` 的外部项目路径依赖 | 属于既有文件问题，不影响本次新增 manifold 代码路径 |
 
 ## Resources
 - `doc/笔刷功能-实现计划.md`
@@ -50,4 +56,7 @@
 - `src/core/brush/brush-session.ts`
 - `src/core/brush/brush-engine-3d.ts`
 - `src/core/brush/clipper2-wasm-adapter.ts`
+- `src/core/brush/brush-engine-3d.ts`
+- `src/core/__tests__/brush-engine-3d.test.ts`
 - `node_modules/clipper2-wasm/README.md`
+- `node_modules/manifold-3d/README.md`

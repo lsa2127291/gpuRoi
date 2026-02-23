@@ -1,15 +1,3 @@
-/**
- * todo:
- * 1，将目前的 dicom 坐标合并换成 canvas 坐标合并（解决笔刷精度不够的问题），点数按16、32、64、128（根据笔刷半径大小）阶段递增，
- *    重绘时保存 canvas 的坐标对象，将canvas坐标对象进行合并，并把合并好的canvas传入changPolygon直接画
- * 2. mpr生成，将横截面每一页的polygon用固定的x,y值（sagtittl,cornal）穿过，把交点俩俩组合成矩形（以交点为中心，thinkess为宽度进行拓展），
- * 把所有矩形 union 成mpr图像，修改则先把mpr裁剪掉修改前矩形，再 union 修改后矩形
- * 3. clearRect目前不能实时响应，resize要修改
- * 4. generateShapeFromBrush 没必要每次执行
- * 5. 其他如层间差值、扩张收缩、create external Roi 等算法交给后端
- * 6. 利用 OffscreenCanvas 减少多个roi的重绘次数，详细实现见 testContourApp
- * 7. smartbrush 依然以 ct 为精度网格化笔刷，求出阈值下笔刷轮廓后转为pixel坐标再转为canvas坐标求 uion 得到结果
- */
 import { getCanvasSize, isPointInPolygon, } from '.';
 import { viewerCore } from '@/containers/Viewer/Viewer3d/core';
 import Shape from '@doodle3d/clipper-js';

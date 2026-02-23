@@ -259,20 +259,33 @@ class Clipper2WasmBrushAdapter {
     eraseWithDifference(baseSegments, brushPolygon) {
         if (baseSegments.length === 0)
             return [];
-        const openSubject = this.createPaths(baseSegments.map((seg) => [seg.a, seg.b]));
+        const split = splitSegmentsForUnion(baseSegments);
+        const closedSubject = this.createPaths(split.closedLoops);
+        const openSubject = this.createPaths(split.openSegments.map((seg) => [seg.a, seg.b]));
         const clipPaths = this.createPaths([brushPolygon]);
         const clipper = this.createClipperInstance();
         const closedSolution = new this.module.PathsD();
         const openSolution = new this.module.PathsD();
         try {
             clipper.SetPreserveCollinear(true);
-            clipper.AddOpenSubject(openSubject);
+            if (split.closedLoops.length > 0) {
+                clipper.AddSubject(closedSubject);
+            }
+            if (split.openSegments.length > 0) {
+                clipper.AddOpenSubject(openSubject);
+            }
             clipper.AddClip(clipPaths);
             const succeeded = clipper.ExecutePath(this.module.ClipType.Difference, this.module.FillRule.NonZero, closedSolution, openSolution);
             if (!succeeded) {
                 throw new Error('Clipper2 difference ExecutePath failed');
             }
-            return this.readPathsAsOpenSegments(openSolution);
+            const result = [];
+            const closedPolygons = this.readPaths(closedSolution);
+            for (const polygon of closedPolygons) {
+                result.push(...polygonToSegments(polygon));
+            }
+            result.push(...this.readPathsAsOpenSegments(openSolution));
+            return result;
         }
         finally {
             safeDelete(openSolution);
@@ -280,6 +293,7 @@ class Clipper2WasmBrushAdapter {
             safeDelete(clipper);
             safeDelete(clipPaths);
             safeDelete(openSubject);
+            safeDelete(closedSubject);
         }
     }
     createPath(points) {

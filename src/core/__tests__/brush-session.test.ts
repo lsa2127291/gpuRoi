@@ -71,6 +71,54 @@ describe('DefaultBrushSession', () => {
     expect(callBaseSegmentLengths).toEqual([0, 1, 2])
   })
 
+  it('endStroke should commit all appended stroke points from move sampling', async () => {
+    const previewEngine: BrushEngine2D = {
+      preview(input) {
+        return {
+          nextSegments: input.baseSegments,
+          dirtyBoundsMm: { minX: 0, minY: 0, maxX: 0, maxY: 0 },
+          stats: { segmentCount: input.baseSegments.length, elapsedMs: 0 },
+        }
+      },
+    }
+
+    let committedStrokePoints: CommitInput['stroke']['points'] = []
+    const commitEngine: BrushEngine3D = {
+      async commit(input: CommitInput): Promise<CommitOutput> {
+        committedStrokePoints = input.stroke.points.map((p) => ({ x: p.x, y: p.y }))
+        return {
+          newMeshId: `${input.meshId}:ok`,
+          mesh: input.mesh,
+          triangleCount: input.mesh.indices.length / 3,
+          elapsedMs: 0,
+        }
+      },
+    }
+
+    const session = new DefaultBrushSession([], {
+      previewEngine,
+      commitEngine,
+      createCommitInput: () => ({
+        meshId: 'mesh-1',
+        mesh: makeMesh(),
+        slicePlane: { normal: [0, 0, 1], anchor: [0, 0, 0] },
+      }),
+    })
+
+    session.beginStroke({ x: 0, y: 0 }, 2, 'add')
+    session.appendPoint({ x: 0.8, y: 0 })
+    session.appendPoint({ x: 1.6, y: 0.2 })
+    session.appendPoint({ x: 2.4, y: 0.3 })
+    await session.endStroke()
+
+    expect(committedStrokePoints).toEqual([
+      { x: 0, y: 0 },
+      { x: 0.8, y: 0 },
+      { x: 1.6, y: 0.2 },
+      { x: 2.4, y: 0.3 },
+    ])
+  })
+
   it('latest preview should win while drawing', () => {
     const previewEngine: BrushEngine2D = {
       preview(input) {

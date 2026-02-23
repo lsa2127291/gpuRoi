@@ -12,7 +12,7 @@ export {
   DefaultBrushEngine2D,
 } from './core/brush/brush-engine-2d'
 export { createClipper2WasmBrushAdapter } from './core/brush/clipper2-wasm-adapter'
-export { createBrushEngine3D, ApproxBrushEngine3D } from './core/brush/brush-engine-3d'
+export { createBrushEngine3D, ApproxBrushEngine3D, ManifoldBrushEngine3D } from './core/brush/brush-engine-3d'
 export { createBrushSession, DefaultBrushSession } from './core/brush/brush-session'
 export { CanvasWebGPULineRenderer } from './core/gpu/webgpu-line-renderer'
 export { planChunks } from './core/chunk-planner'

@@ -5,7 +5,7 @@ import { normalize } from '@/core/vec3';
 import { BrushOverlayRenderer } from '@/renderer/brush-overlay-renderer';
 import { MultiViewManager } from '@/renderer/multi-view-manager';
 import { createBrushEngine2DWithClipper2Wasm } from '@/core/brush/brush-engine-2d';
-import { ApproxBrushEngine3D } from '@/core/brush/brush-engine-3d';
+import { createBrushEngine3D } from '@/core/brush/brush-engine-3d';
 import { createBrushSession } from '@/core/brush/brush-session';
 import { MPR_VIEWS } from '@/types';
 const SCALE = 3;
@@ -56,9 +56,10 @@ const overlayRenderer = new BrushOverlayRenderer(canvas, {
     showBrushTrail: false,
     activeLineWidthPx: 2,
 });
-const commitEngine = new ApproxBrushEngine3D({
-    displacementScaleMm: 0.35,
-    falloffMm: 0.35,
+const commitEngine = createBrushEngine3D({
+    backend: 'manifold',
+    brushContourPoints: 40,
+    cutterDepthPaddingMm: 2,
     idPrefix: 'demo-brush',
 });
 async function createDemoPreviewEngine() {
@@ -200,13 +201,11 @@ async function main() {
             btn.classList.toggle('active', viewNames[i] === viewName);
         });
         customPanel.style.display = viewName === 'Custom' ? 'flex' : 'none';
-        if (brushSession) {
-            brushSession.invalidate('cameraRotate');
-        }
+        brushSession.invalidate('cameraRotate');
         void update();
     }
     async function commitCurrentStroke() {
-        if (!brushSession || brushSession.currentState !== 'drawing')
+        if (brushSession.currentState !== 'drawing')
             return;
         try {
             const commit = await brushSession.endStroke();
@@ -231,9 +230,7 @@ async function main() {
     slider.addEventListener('input', () => {
         if (navigationLocked)
             return;
-        if (brushSession) {
-            brushSession.invalidate('anchorScroll');
-        }
+        brushSession.invalidate('anchorScroll');
         void update();
     });
     for (const input of [nxInput, nyInput, nzInput, uxInput, uyInput, uzInput]) {
@@ -241,9 +238,7 @@ async function main() {
             if (navigationLocked)
                 return;
             if (currentView === 'Custom') {
-                if (brushSession) {
-                    brushSession.invalidate('cameraRotate');
-                }
+                brushSession.invalidate('cameraRotate');
                 void update();
             }
         });
@@ -253,7 +248,7 @@ async function main() {
             return;
         brushMode = 'add';
         updateBrushButtons();
-        if (lastPointerLocalMm && brushSession) {
+        if (lastPointerLocalMm) {
             overlayRenderer.renderCommittedActive(brushSession.getCurrentSegments());
             overlayRenderer.renderCursor(lastPointerLocalMm, brushRadiusMm, brushMode);
         }
@@ -263,7 +258,7 @@ async function main() {
             return;
         brushMode = 'erase';
         updateBrushButtons();
-        if (lastPointerLocalMm && brushSession) {
+        if (lastPointerLocalMm) {
             overlayRenderer.renderCommittedActive(brushSession.getCurrentSegments());
             overlayRenderer.renderCursor(lastPointerLocalMm, brushRadiusMm, brushMode);
         }
@@ -271,14 +266,12 @@ async function main() {
     brushRadiusInput.addEventListener('input', () => {
         brushRadiusMm = Math.max(0.1, Number(brushRadiusInput.value) || DEFAULT_BRUSH_RADIUS_MM);
         brushRadiusLabel.textContent = `${brushRadiusMm} mm`;
-        if (lastPointerLocalMm && brushSession) {
+        if (lastPointerLocalMm) {
             overlayRenderer.renderCommittedActive(brushSession.getCurrentSegments());
             overlayRenderer.renderCursor(lastPointerLocalMm, brushRadiusMm, brushMode);
         }
     });
     canvas.addEventListener('mousedown', (event) => {
-        if (!brushSession)
-            return;
         if (brushSession.currentState !== 'idle')
             return;
         pointerDown = true;
@@ -299,21 +292,22 @@ async function main() {
         }
     });
     canvas.addEventListener('pointermove', (event) => {
-        if (!brushSession)
-            return;
         const localPoint = canvasToLocalMm(event);
         lastPointerLocalMm = localPoint;
         if (brushSession.currentState === 'drawing' && pointerDown) {
             // Use coalesced events for higher-resolution sampling during strokes
             const coalescedEvents = event.getCoalescedEvents?.() ?? [];
             let preview = null;
-            if (coalescedEvents.length > 1) {
-                for (const ce of coalescedEvents) {
-                    preview = brushSession.appendPoint(canvasToLocalMm(ce));
+            for (const ce of coalescedEvents) {
+                const coalescedPreview = brushSession.appendPoint(canvasToLocalMm(ce));
+                if (coalescedPreview) {
+                    preview = coalescedPreview;
                 }
             }
-            else {
-                preview = brushSession.appendPoint(localPoint);
+            // Always include the dispatch event's point to avoid losing the tail sample.
+            const currentPreview = brushSession.appendPoint(localPoint);
+            if (currentPreview) {
+                preview = currentPreview;
             }
             if (preview) {
                 overlayRenderer.renderPreview(preview.nextSegments, preview.brushPolygon2D ?? [], brushMode);
@@ -324,17 +318,22 @@ async function main() {
         overlayRenderer.renderCommittedActive(brushSession.getCurrentSegments());
         overlayRenderer.renderCursor(localPoint, brushRadiusMm, brushMode);
     });
-    window.addEventListener('mouseup', () => {
-        if (!brushSession)
-            return;
+    window.addEventListener('mouseup', (event) => {
         if (!pointerDown)
             return;
+        if (brushSession.currentState === 'drawing') {
+            const localPoint = canvasToLocalMm(event);
+            lastPointerLocalMm = localPoint;
+            const preview = brushSession.appendPoint(localPoint);
+            if (preview) {
+                overlayRenderer.renderPreview(preview.nextSegments, preview.brushPolygon2D ?? [], brushMode);
+            }
+            overlayRenderer.renderCursor(localPoint, brushRadiusMm, brushMode);
+        }
         pointerDown = false;
         void commitCurrentStroke();
     });
     window.addEventListener('keydown', (event) => {
-        if (!brushSession)
-            return;
         if (event.key !== 'Escape')
             return;
         if (brushSession.currentState === 'drawing') {

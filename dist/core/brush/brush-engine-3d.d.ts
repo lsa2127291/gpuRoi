@@ -4,8 +4,12 @@ export interface BrushEngine3D {
     commit(input: CommitInput): Promise<CommitOutput>;
 }
 export interface BrushEngine3DOptions {
+    backend?: 'manifold' | 'approx';
     displacementScaleMm?: number;
     falloffMm?: number;
+    brushContourPoints?: number;
+    cutterDepthMm?: number;
+    cutterDepthPaddingMm?: number;
     idPrefix?: string;
 }
 interface PlaneBasis {
@@ -16,6 +20,12 @@ interface PlaneBasis {
 }
 export declare function mapStrokeTo3D(points: Vec2[], basis: PlaneBasis): Vec3[];
 export declare class ApproxBrushEngine3D implements BrushEngine3D {
+    private readonly options;
+    private commitSeq;
+    constructor(options?: BrushEngine3DOptions);
+    commit(input: CommitInput): Promise<CommitOutput>;
+}
+export declare class ManifoldBrushEngine3D implements BrushEngine3D {
     private readonly options;
     private commitSeq;
     constructor(options?: BrushEngine3DOptions);

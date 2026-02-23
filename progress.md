@@ -38,3 +38,36 @@
 |-------|------------|
 | session-catchup 默认脚本路径不存在 | 改用 `.codex/skills/planning-with-files/scripts/session-catchup.py` |
 | `npm install clipper2-wasm` 沙箱网络 `EPERM` | 提权执行后安装成功 |
+
+## Session: 2026-02-23
+
+### Current Status
+- **Phase:** 7 - Manifold-3D Integration
+- **Started:** 2026-02-23
+
+### Actions Taken
+- 安装 `manifold-3d` 并确认最小调用链可运行（`Module.setup()` + `Manifold.ofMesh/getMesh`）。
+- 在 `src/core/brush/brush-engine-3d.ts` 新增 `ManifoldBrushEngine3D`：
+  - 复用笔刷轨迹生成 stamp 轮廓。
+  - `CrossSection.compose` 合并轮廓后 `extrude` 为 cutter。
+  - 按切面 basis 变换 cutter 到世界坐标。
+  - 对原 mesh 执行 `add/subtract` 并回写 `MeshData`。
+- `createBrushEngine3D` 默认改为 manifold 后端，并保留 `backend: 'approx'` 兼容分支。
+- demo 主入口切换为 `createBrushEngine3D({ backend: 'manifold' })`。
+- 新增 `src/core/__tests__/brush-engine-3d.test.ts`，覆盖：
+  - 工厂默认后端与显式 approx 后端。
+  - manifold 引擎空笔画路径。
+  - manifold 真实 `erase` 布尔提交。
+
+### Test Results
+| Test | Expected | Actual | Status |
+|------|----------|--------|--------|
+| `npm test -- brush-engine-3d` | 新增 3D 引擎测试通过 | 4/4 passed | pass |
+| `npm test` | 全量回归通过 | 54/54 passed | pass |
+| `npm run build` | TS/Vite 构建成功 | fail（仅 `src/core/brush/brush-example.ts` 既有外部依赖缺失报错） | risk |
+
+### Errors
+| Error | Resolution |
+|-------|------------|
+| `npm install manifold-3d` 沙箱网络 `EPERM` | 提权执行后安装成功 |
+| `npm run build` 失败（`src/core/brush/brush-example.ts` 外部路径依赖无法解析） | 判定为与本次改动无关的既有问题，未在本次任务中改动 |

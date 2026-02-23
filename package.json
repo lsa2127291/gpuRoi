@@ -19,6 +19,7 @@
     "vitest": "^2.1.0"
   },
   "dependencies": {
-    "clipper2-wasm": "^0.2.1"
+    "clipper2-wasm": "^0.2.1",
+    "manifold-3d": "^3.3.2"
   }
 }

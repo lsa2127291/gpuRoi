@@ -4,7 +4,7 @@
 完成 `doc/笔刷功能-实现计划.md` 的 M1-M3：2D 预览闭环、状态机与渲染接线、3D 提交与 mesh 更新闭环，并补齐核心测试。
 
 ## Current Phase
-Phase 6
+Phase 7
 
 ## Phases
 
@@ -46,6 +46,14 @@ Phase 6
 - [x] 补充适配器注入测试并验证构建
 - **Status:** complete
 
+### Phase 7: Manifold-3D Integration
+- [x] 安装 `manifold-3d` 并确认 WASM runtime 可在 Node/浏览器初始化
+- [x] 新增 `ManifoldBrushEngine3D`（`ofMesh + extrude + add/subtract`）
+- [x] `createBrushEngine3D` 默认切到 manifold，保留 `backend: 'approx'`
+- [x] demo 改为使用 manifold commit 引擎
+- [x] 新增 `brush-engine-3d.test.ts` 覆盖默认后端与真实布尔提交
+- **Status:** complete
+
 ## Decisions Made
 | Decision | Rationale |
 |----------|-----------|
@@ -55,6 +63,7 @@ Phase 6
 | `BatchGPUSlicer.updateMesh` 先采用安全回退策略（内部全量 `initBatch`） | 优先保证提交链路正确，再做 chunk 局部更新优化 |
 | Clipper2 接入采用“适配层注入 + 运行时 fallback” | 降低 wasm 初始化失败时的功能中断风险 |
 | `add/erase` 均切到 Clipper2（分别走 Union / Difference） | 对齐 V3 计划里的 2D 布尔引擎目标，减少双轨行为差异 |
+| 3D commit 默认后端切换为 `manifold-3d`，`ApproxBrushEngine3D` 保留为可选 | 在不破坏调用接口的前提下实现真实 mesh boolean |
 
 ## Errors Encountered
 | Error | Resolution |
@@ -62,3 +71,4 @@ Phase 6
 | `~/.codex/skills/.../session-catchup.py` 路径不存在 | 改为项目内 `.codex/skills/planning-with-files/scripts/session-catchup.py` |
 | `npm install clipper2-wasm` 在沙箱内网络连接 `EPERM` | 按流程提权后安装成功 |
 | `clipper2-wasm` 发布包缺失可解析 ESM type 入口 | 运行时直接 import ESM 产物并在适配层做类型收敛 |
+| `npm install manifold-3d` 在沙箱内网络连接 `EPERM` | 按流程提权后安装成功 |

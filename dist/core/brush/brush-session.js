@@ -42,6 +42,10 @@ export class DefaultBrushSession {
         if (this.state === 'idle' || this.state === 'invalidated') {
             this.lastPreview = emptyPreview(this.baseSegments);
             this.deps.onPreview?.(this.lastPreview);
+            if (this.state === 'invalidated') {
+                // External reslice/update already provided fresh base data.
+                this.transitionTo('idle');
+            }
         }
     }
     beginStroke(point, radiusMm, mode) {
@@ -57,14 +61,24 @@ export class DefaultBrushSession {
     appendPoint(point) {
         if (this.state !== 'drawing')
             return null;
-        this.strokeBuilder.append(point);
+        const appended = this.strokeBuilder.append(point);
+        if (!appended && this.lastPreview) {
+            // Skip no-op points once preview has started.
+            return null;
+        }
         const token = ++this.previewToken;
         const stroke = this.strokeBuilder.snapshot();
-        // Always compute from preStrokeSnapshot to avoid incremental polygon
-        // overlap artifacts that cause jagged edges during mousemove strokes.
+        const incrementalPoints = this.lastPreview && stroke.points.length >= 2
+            ? stroke.points.slice(stroke.points.length - 2)
+            : stroke.points;
+        const previewBaseSegments = this.lastPreview
+            ? this.lastPreview.nextSegments
+            : this.preStrokeSnapshot;
+        // Use incremental preview after the first brush stamp to keep mousemove
+        // latency stable for long strokes.
         const preview = this.deps.previewEngine.preview({
-            baseSegments: this.preStrokeSnapshot,
-            strokePoints: stroke.points,
+            baseSegments: previewBaseSegments,
+            strokePoints: incrementalPoints,
             radiusMm: stroke.radiusMm,
             mode: stroke.mode,
         });
