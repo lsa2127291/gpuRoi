@@ -206,16 +206,18 @@ async function main() {
     const token = ++updateToken
     const offset = Number(slider.value)
     sliderValue.textContent = `${offset} mm`
-    currentCamera = getCurrentCamera()
-    currentAnchor = getAnchor(currentCamera, offset)
+    const cameraSnapshot = getCurrentCamera()
+    const anchorSnapshot = getAnchor(cameraSnapshot, offset)
+    currentCamera = cameraSnapshot
+    currentAnchor = anchorSnapshot
 
     try {
       const segments3D = await activeSlicer.sliceBatchFlat(
-        currentCamera.viewPlaneNormal,
-        currentAnchor,
+        cameraSnapshot.viewPlaneNormal,
+        anchorSnapshot,
       )
       if (token !== updateToken) return
-      const activeSegments = toBrushSegments(segments3D, currentCamera, currentAnchor)
+      const activeSegments = toBrushSegments(segments3D, cameraSnapshot, anchorSnapshot)
       brushSession.setBaseSegments(activeSegments)
       overlayRenderer.renderCommittedActive(activeSegments)
 

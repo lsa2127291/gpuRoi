@@ -1,10 +1,11 @@
 import type { MeshColor, MeshData, Segment3D, SliceBitmapOptions, Vec3 } from '@/types'
-import type { BatchMeshSlicer } from './batch-slicer-interface'
-import type { Chunk } from './chunk-planner'
-import { planChunks } from './chunk-planner'
-import { buildLocalBasis } from './projection'
-import { planeIntersectsBoundingBox } from './slicer'
-import bitmapShaderSource from './slicer-batch-bitmap.wgsl?raw'
+import type { BatchMeshSlicer } from './batch-slicer-interface' 
+import type { Chunk } from './chunk-planner' 
+import { planChunks } from './chunk-planner' 
+import { buildLocalBasis } from './projection' 
+import { normalizeSliceSegments } from './slice-segment-normalizer'
+import { planeIntersectsBoundingBox } from './slicer' 
+import bitmapShaderSource from './slicer-batch-bitmap.wgsl?raw' 
 
 const WORKGROUP_SIZE = 64
 const EPSILON = 1e-8
@@ -239,9 +240,9 @@ export class BatchGPUSlicer implements BatchMeshSlicer {
     await this.initBatch(this.sourceMeshes, this.sourceColors)
   }
 
-  async sliceBatch(normal: Vec3, anchor: Vec3): Promise<Segment3D[][]> {
-    if (!this.slicePipeline || this.chunkGPUs.length === 0) {
-      return []
+  async sliceBatch(normal: Vec3, anchor: Vec3): Promise<Segment3D[][]> { 
+    if (!this.slicePipeline || this.chunkGPUs.length === 0) { 
+      return [] 
     }
 
     const results: Segment3D[][] = new Array(this.meshCount)
@@ -256,31 +257,43 @@ export class BatchGPUSlicer implements BatchMeshSlicer {
         if (entry.meshIndex >= 0 && entry.meshIndex < results.length) {
           results[entry.meshIndex].push({ start: entry.start, end: entry.end })
         }
-      }
+      } 
+    } 
+
+    for (let i = 0; i < results.length; i++) {
+      results[i] = normalizeSliceSegments(results[i])
     }
 
-    return results
-  }
+    return results 
+  } 
 
-  async sliceBatchFlat(normal: Vec3, anchor: Vec3): Promise<Segment3D[]> {
-    if (!this.slicePipeline || this.chunkGPUs.length === 0) {
-      return []
-    }
+  async sliceBatchFlat(normal: Vec3, anchor: Vec3): Promise<Segment3D[]> { 
+    if (!this.slicePipeline || this.chunkGPUs.length === 0) { 
+      return [] 
+    } 
+
+    const segmentsByMesh: Segment3D[][] = new Array(this.meshCount)
+    for (let i = 0; i < this.meshCount; i++) segmentsByMesh[i] = []
+
+    for (const chunkGPU of this.getActiveChunks(normal, anchor)) { 
+      const segmentCount = await this.dispatchAndReadCounter(chunkGPU, normal, anchor) 
+      if (segmentCount === 0) continue 
+
+      const segments = await this.readbackSegments(chunkGPU, segmentCount) 
+      for (const entry of segments) { 
+        if (entry.meshIndex >= 0 && entry.meshIndex < segmentsByMesh.length) {
+          segmentsByMesh[entry.meshIndex].push({ start: entry.start, end: entry.end })
+        }
+      } 
+    } 
 
     const allSegments: Segment3D[] = []
-
-    for (const chunkGPU of this.getActiveChunks(normal, anchor)) {
-      const segmentCount = await this.dispatchAndReadCounter(chunkGPU, normal, anchor)
-      if (segmentCount === 0) continue
-
-      const segments = await this.readbackSegments(chunkGPU, segmentCount)
-      for (const entry of segments) {
-        allSegments.push({ start: entry.start, end: entry.end })
-      }
+    for (const meshSegments of segmentsByMesh) {
+      allSegments.push(...normalizeSliceSegments(meshSegments))
     }
 
-    return allSegments
-  }
+    return allSegments 
+  } 
 
   async sliceToBitmap(
     normal: Vec3,

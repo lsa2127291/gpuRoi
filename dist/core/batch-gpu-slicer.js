@@ -1,5 +1,6 @@
 import { planChunks } from './chunk-planner';
 import { buildLocalBasis } from './projection';
+import { normalizeSliceSegments } from './slice-segment-normalizer';
 import { planeIntersectsBoundingBox } from './slicer';
 import bitmapShaderSource from './slicer-batch-bitmap.wgsl?raw';
 const WORKGROUP_SIZE = 64;
@@ -200,21 +201,32 @@ export class BatchGPUSlicer {
                 }
             }
         }
+        for (let i = 0; i < results.length; i++) {
+            results[i] = normalizeSliceSegments(results[i]);
+        }
         return results;
     }
     async sliceBatchFlat(normal, anchor) {
         if (!this.slicePipeline || this.chunkGPUs.length === 0) {
             return [];
         }
-        const allSegments = [];
+        const segmentsByMesh = new Array(this.meshCount);
+        for (let i = 0; i < this.meshCount; i++)
+            segmentsByMesh[i] = [];
         for (const chunkGPU of this.getActiveChunks(normal, anchor)) {
             const segmentCount = await this.dispatchAndReadCounter(chunkGPU, normal, anchor);
             if (segmentCount === 0)
                 continue;
             const segments = await this.readbackSegments(chunkGPU, segmentCount);
             for (const entry of segments) {
-                allSegments.push({ start: entry.start, end: entry.end });
+                if (entry.meshIndex >= 0 && entry.meshIndex < segmentsByMesh.length) {
+                    segmentsByMesh[entry.meshIndex].push({ start: entry.start, end: entry.end });
+                }
             }
+        }
+        const allSegments = [];
+        for (const meshSegments of segmentsByMesh) {
+            allSegments.push(...normalizeSliceSegments(meshSegments));
         }
         return allSegments;
     }

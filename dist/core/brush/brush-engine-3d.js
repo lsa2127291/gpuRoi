@@ -125,27 +125,20 @@ function buildPlaneTransformMatrix(basis) {
         basis.anchor[0], basis.anchor[1], basis.anchor[2], 1,
     ];
 }
-function computeMeshSpanAlongNormal(vertices, normal) {
-    if (vertices.length < 3)
-        return 0;
-    let minProj = Infinity;
-    let maxProj = -Infinity;
-    for (let i = 0; i < vertices.length; i += 3) {
-        const projection = vertices[i] * normal[0] + vertices[i + 1] * normal[1] + vertices[i + 2] * normal[2];
-        minProj = Math.min(minProj, projection);
-        maxProj = Math.max(maxProj, projection);
-    }
-    if (!Number.isFinite(minProj) || !Number.isFinite(maxProj))
-        return 0;
-    return Math.max(0, maxProj - minProj);
-}
-function computeCutterDepthMm(mesh, normal, strokeRadiusMm, options) {
+function computeCutterDepthMm(strokeRadiusMm, options) {
     if (options.cutterDepthMm > 0) {
         return options.cutterDepthMm;
     }
-    const span = computeMeshSpanAlongNormal(mesh.vertices, normal);
-    const fallbackThickness = Math.max(strokeRadiusMm * 2, options.cutterDepthPaddingMm * 2, 0.1);
-    return span + fallbackThickness;
+    // Keep default edits local to the current anchor plane. The previous
+    // full-mesh span depth caused one stroke to leak into many anchors.
+    return Math.max(strokeRadiusMm * 2, options.cutterDepthPaddingMm * 2, 0.1);
+}
+function centerExtrusionAnchor(anchor, normal, depthMm) {
+    const halfDepth = depthMm * 0.5;
+    if (halfDepth <= 0) {
+        return [anchor[0], anchor[1], anchor[2]];
+    }
+    return subtract(anchor, scale(normal, halfDepth));
 }
 function toManifoldMeshData(mesh) {
     return {
@@ -254,9 +247,9 @@ export class ApproxBrushEngine3D {
     async commit(input) {
         const t0 = nowMs();
         const basis = buildPlaneBasis(input);
-        const strokePoints = input.stroke.simplified.length > 0
-            ? input.stroke.simplified
-            : input.stroke.points;
+        // Keep commit geometry aligned with interactive incremental preview:
+        // use the raw sampled trail instead of a globally smoothed path.
+        const strokePoints = input.stroke.points;
         if (strokePoints.length === 0 || input.stroke.radiusMm <= 0) {
             return {
                 newMeshId: `${input.meshId}:${this.options.idPrefix}:${++this.commitSeq}`,
@@ -306,9 +299,9 @@ export class ManifoldBrushEngine3D {
     async commit(input) {
         const t0 = nowMs();
         const basis = buildPlaneBasis(input);
-        const strokePoints = input.stroke.simplified.length > 0
-            ? input.stroke.simplified
-            : input.stroke.points;
+        // Keep commit geometry aligned with interactive incremental preview:
+        // use the raw sampled trail instead of a globally smoothed path.
+        const strokePoints = input.stroke.points;
         if (strokePoints.length === 0 || input.stroke.radiusMm <= 0) {
             return {
                 newMeshId: `${input.meshId}:${this.options.idPrefix}:${++this.commitSeq}`,
@@ -334,6 +327,8 @@ export class ManifoldBrushEngine3D {
         let cutterWorld = null;
         let resultSolid = null;
         let resultMesh = null;
+        let stitchedSolid = null;
+        let stitchedMesh = null;
         try {
             const sourceMeshData = toManifoldMeshData(input.mesh);
             sourceMeshObj = new runtime.Mesh(sourceMeshData);
@@ -341,7 +336,7 @@ export class ManifoldBrushEngine3D {
             sourceSolid = runtime.Manifold.ofMesh(sourceMeshObj);
             const polygons = brushStamps.map((polygon) => polygon.map((p) => [p.x, p.y]));
             brushCrossSection = runtime.CrossSection.compose(polygons);
-            const cutterDepthMm = computeCutterDepthMm(input.mesh, basis.normal, input.stroke.radiusMm, {
+            const cutterDepthMm = computeCutterDepthMm(input.stroke.radiusMm, {
                 cutterDepthMm: this.options.cutterDepthMm,
                 cutterDepthPaddingMm: this.options.cutterDepthPaddingMm,
             });
@@ -349,12 +344,22 @@ export class ManifoldBrushEngine3D {
                 throw new Error('invalid cutter depth');
             }
             cutterLocal = brushCrossSection.extrude(cutterDepthMm, 0, 0, [1, 1], true);
-            cutterWorld = cutterLocal.transform(buildPlaneTransformMatrix(basis));
+            const cutterBasis = {
+                ...basis,
+                anchor: centerExtrusionAnchor(basis.anchor, basis.normal, cutterDepthMm),
+            };
+            cutterWorld = cutterLocal.transform(buildPlaneTransformMatrix(cutterBasis));
             resultSolid = input.stroke.mode === 'add'
                 ? sourceSolid.add(cutterWorld)
                 : sourceSolid.subtract(cutterWorld);
             resultMesh = resultSolid.getMesh();
-            const mesh = fromManifoldMeshData(resultMesh);
+            resultMesh.merge?.();
+            // Rebuild once from mesh data to reduce coplanar seam leftovers that
+            // can surface as duplicate slice segments after view/anchor changes.
+            stitchedSolid = runtime.Manifold.ofMesh(resultMesh);
+            stitchedMesh = stitchedSolid.getMesh();
+            stitchedMesh.merge?.();
+            const mesh = fromManifoldMeshData(stitchedMesh);
             return {
                 newMeshId: `${input.meshId}:${this.options.idPrefix}:${++this.commitSeq}`,
                 mesh,
@@ -367,7 +372,7 @@ export class ManifoldBrushEngine3D {
             throw new Error(`ManifoldBrushEngine3D commit failed: ${message}`);
         }
         finally {
-            safeDeleteMany([resultMesh, resultSolid, cutterWorld, cutterLocal, brushCrossSection, sourceSolid, sourceMeshObj]);
+            safeDeleteMany([stitchedMesh, stitchedSolid, resultMesh, resultSolid, cutterWorld, cutterLocal, brushCrossSection, sourceSolid, sourceMeshObj]);
         }
     }
 }

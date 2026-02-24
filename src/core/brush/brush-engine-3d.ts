@@ -188,25 +188,7 @@ function buildPlaneTransformMatrix(basis: PlaneBasis): [
   ]
 }
 
-function computeMeshSpanAlongNormal(vertices: Float32Array, normal: Vec3): number {
-  if (vertices.length < 3) return 0
-
-  let minProj = Infinity
-  let maxProj = -Infinity
-
-  for (let i = 0; i < vertices.length; i += 3) {
-    const projection = vertices[i] * normal[0] + vertices[i + 1] * normal[1] + vertices[i + 2] * normal[2]
-    minProj = Math.min(minProj, projection)
-    maxProj = Math.max(maxProj, projection)
-  }
-
-  if (!Number.isFinite(minProj) || !Number.isFinite(maxProj)) return 0
-  return Math.max(0, maxProj - minProj)
-}
-
 function computeCutterDepthMm(
-  mesh: MeshData,
-  normal: Vec3,
   strokeRadiusMm: number,
   options: { cutterDepthMm: number; cutterDepthPaddingMm: number },
 ): number {
@@ -214,9 +196,17 @@ function computeCutterDepthMm(
     return options.cutterDepthMm
   }
 
-  const span = computeMeshSpanAlongNormal(mesh.vertices, normal)
-  const fallbackThickness = Math.max(strokeRadiusMm * 2, options.cutterDepthPaddingMm * 2, 0.1)
-  return span + fallbackThickness
+  // Keep default edits local to the current anchor plane. The previous
+  // full-mesh span depth caused one stroke to leak into many anchors.
+  return Math.max(strokeRadiusMm * 2, options.cutterDepthPaddingMm * 2, 0.1)
+}
+
+function centerExtrusionAnchor(anchor: Vec3, normal: Vec3, depthMm: number): Vec3 {
+  const halfDepth = depthMm * 0.5
+  if (halfDepth <= 0) {
+    return [anchor[0], anchor[1], anchor[2]]
+  }
+  return subtract(anchor, scale(normal, halfDepth))
 }
 
 function toManifoldMeshData(mesh: MeshData): ManifoldMeshData {
@@ -347,9 +337,9 @@ export class ApproxBrushEngine3D implements BrushEngine3D {
   async commit(input: CommitInput): Promise<CommitOutput> {
     const t0 = nowMs()
     const basis = buildPlaneBasis(input)
-    const strokePoints = input.stroke.simplified.length > 0
-      ? input.stroke.simplified
-      : input.stroke.points
+    // Keep commit geometry aligned with interactive incremental preview:
+    // use the raw sampled trail instead of a globally smoothed path.
+    const strokePoints = input.stroke.points
 
     if (strokePoints.length === 0 || input.stroke.radiusMm <= 0) {
       return {
@@ -416,9 +406,9 @@ export class ManifoldBrushEngine3D implements BrushEngine3D {
   async commit(input: CommitInput): Promise<CommitOutput> {
     const t0 = nowMs()
     const basis = buildPlaneBasis(input)
-    const strokePoints = input.stroke.simplified.length > 0
-      ? input.stroke.simplified
-      : input.stroke.points
+    // Keep commit geometry aligned with interactive incremental preview:
+    // use the raw sampled trail instead of a globally smoothed path.
+    const strokePoints = input.stroke.points
 
     if (strokePoints.length === 0 || input.stroke.radiusMm <= 0) {
       return {
@@ -447,13 +437,15 @@ export class ManifoldBrushEngine3D implements BrushEngine3D {
     let sourceMeshObj: ManifoldDeleteable | null = null
     let sourceSolid: ManifoldDeleteable | null = null
     let brushCrossSection: ManifoldDeleteable | null = null
-    let cutterLocal: ManifoldDeleteable | null = null
-    let cutterWorld: ManifoldDeleteable | null = null
-    let resultSolid: ManifoldDeleteable | null = null
-    let resultMesh: ManifoldDeleteable | null = null
+    let cutterLocal: ManifoldDeleteable | null = null 
+    let cutterWorld: ManifoldDeleteable | null = null 
+    let resultSolid: ManifoldDeleteable | null = null 
+    let resultMesh: ManifoldDeleteable | null = null 
+    let stitchedSolid: ManifoldDeleteable | null = null
+    let stitchedMesh: ManifoldDeleteable | null = null
 
-    try {
-      const sourceMeshData = toManifoldMeshData(input.mesh)
+    try { 
+      const sourceMeshData = toManifoldMeshData(input.mesh) 
       sourceMeshObj = new runtime.Mesh(sourceMeshData) as unknown as ManifoldDeleteable
       ;(sourceMeshObj as { merge?: () => boolean }).merge?.()
 
@@ -463,8 +455,6 @@ export class ManifoldBrushEngine3D implements BrushEngine3D {
       brushCrossSection = runtime.CrossSection.compose(polygons)
 
       const cutterDepthMm = computeCutterDepthMm(
-        input.mesh,
-        basis.normal,
         input.stroke.radiusMm,
         {
           cutterDepthMm: this.options.cutterDepthMm,
@@ -480,31 +470,44 @@ export class ManifoldBrushEngine3D implements BrushEngine3D {
         0,
         0,
         [1, 1],
-        true,
+        false,
       )
-      cutterWorld = (cutterLocal as InstanceType<typeof runtime.Manifold>).transform(buildPlaneTransformMatrix(basis))
+      const cutterBasis: PlaneBasis = {
+        ...basis,
+        anchor: centerExtrusionAnchor(basis.anchor, basis.normal, cutterDepthMm),
+      }
+      cutterWorld = (cutterLocal as InstanceType<typeof runtime.Manifold>).transform(
+        buildPlaneTransformMatrix(cutterBasis),
+      )
 
-      resultSolid = input.stroke.mode === 'add'
-        ? (sourceSolid as InstanceType<typeof runtime.Manifold>).add(cutterWorld as InstanceType<typeof runtime.Manifold>)
-        : (sourceSolid as InstanceType<typeof runtime.Manifold>).subtract(cutterWorld as InstanceType<typeof runtime.Manifold>)
+      resultSolid = input.stroke.mode === 'add' 
+        ? (sourceSolid as InstanceType<typeof runtime.Manifold>).add(cutterWorld as InstanceType<typeof runtime.Manifold>) 
+        : (sourceSolid as InstanceType<typeof runtime.Manifold>).subtract(cutterWorld as InstanceType<typeof runtime.Manifold>) 
 
-      resultMesh = (resultSolid as InstanceType<typeof runtime.Manifold>).getMesh() as unknown as ManifoldDeleteable
-      const mesh = fromManifoldMeshData(resultMesh as unknown as ManifoldMeshData)
+      resultMesh = (resultSolid as InstanceType<typeof runtime.Manifold>).getMesh() as unknown as ManifoldDeleteable 
+      ;(resultMesh as { merge?: () => boolean }).merge?.()
 
-      return {
-        newMeshId: `${input.meshId}:${this.options.idPrefix}:${++this.commitSeq}`,
+      // Rebuild once from mesh data to reduce coplanar seam leftovers that
+      // can surface as duplicate slice segments after view/anchor changes.
+      stitchedSolid = runtime.Manifold.ofMesh(resultMesh as InstanceType<typeof runtime.Mesh>)
+      stitchedMesh = (stitchedSolid as InstanceType<typeof runtime.Manifold>).getMesh() as unknown as ManifoldDeleteable
+      ;(stitchedMesh as { merge?: () => boolean }).merge?.()
+      const mesh = fromManifoldMeshData(stitchedMesh as unknown as ManifoldMeshData) 
+
+      return { 
+        newMeshId: `${input.meshId}:${this.options.idPrefix}:${++this.commitSeq}`, 
         mesh,
         triangleCount: mesh.indices.length / 3,
         elapsedMs: nowMs() - t0,
       }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      throw new Error(`ManifoldBrushEngine3D commit failed: ${message}`)
-    } finally {
-      safeDeleteMany([resultMesh, resultSolid, cutterWorld, cutterLocal, brushCrossSection, sourceSolid, sourceMeshObj])
-    }
-  }
-}
+    } catch (error) { 
+      const message = error instanceof Error ? error.message : String(error) 
+      throw new Error(`ManifoldBrushEngine3D commit failed: ${message}`) 
+    } finally { 
+      safeDeleteMany([stitchedMesh, stitchedSolid, resultMesh, resultSolid, cutterWorld, cutterLocal, brushCrossSection, sourceSolid, sourceMeshObj]) 
+    } 
+  } 
+} 
 
 export function createBrushEngine3D(options: BrushEngine3DOptions = {}): BrushEngine3D {
   if (options.backend === 'approx') {
