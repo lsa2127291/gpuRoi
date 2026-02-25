@@ -75,7 +75,7 @@ const overlayRenderer = new BrushOverlayRenderer(canvas, {
 const commitEngine = createBrushEngine3D({
   backend: 'manifold',
   brushContourPoints: 40,
-  cutterDepthPaddingMm: 2,
+  cutterDepthPaddingMm: 0.5,
   idPrefix: 'demo-brush',
 })
 
