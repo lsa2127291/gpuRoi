@@ -207,6 +207,39 @@ describe('ManifoldBrushEngine3D', () => {
     expect(hasInteriorEndpointsAtAnchor(farSegmentsAfterCommit, 2)).toBe(false)
   }, 20000)
 
+  it('planar stroke with large radius should not affect adjacent anchor slice', async () => {
+    const engine = new ManifoldBrushEngine3D({
+      idPrefix: 'manifold-test',
+      brushContourPoints: 40,
+    })
+    const mesh = makeCubeMesh(8)
+
+    const normal: [number, number, number] = [0, 0, 1]
+    const adjacentAnchor: [number, number, number] = [0, 0, -1]
+    const baseAdjacentSegments = sliceMesh(mesh, normal, adjacentAnchor)
+    expect(hasInteriorEndpointsAtAnchor(baseAdjacentSegments, 4)).toBe(false)
+
+    const out = await engine.commit({
+      meshId: 'mesh-0',
+      mesh,
+      slicePlane: {
+        normal,
+        anchor: [0, 0, 0],
+        xAxis: [1, 0, 0],
+        yAxis: [0, 1, 0],
+      },
+      stroke: {
+        points: [{ x: 0, y: 0 }],
+        simplified: [{ x: 0, y: 0 }],
+        radiusMm: 6,
+        mode: 'add',
+      },
+    })
+
+    const adjacentSegmentsAfterCommit = sliceMesh(out.mesh, normal, adjacentAnchor)
+    expect(hasInteriorEndpointsAtAnchor(adjacentSegmentsAfterCommit, 4)).toBe(false)
+  }, 20000)
+
   it('add stroke crossing top boundary should replace center part of original top edge', async () => {
     const engine = new ManifoldBrushEngine3D({
       idPrefix: 'manifold-test',

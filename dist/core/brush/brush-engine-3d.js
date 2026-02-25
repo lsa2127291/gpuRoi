@@ -5,7 +5,8 @@ import manifoldWasmUrl from 'manifold-3d/manifold.wasm?url';
 const EPSILON = 1e-9;
 const DEFAULT_BRUSH_CONTOUR_POINTS = 40;
 const MIN_BRUSH_CONTOUR_POINTS = 12;
-const DEFAULT_CUTTER_DEPTH_PADDING_MM = 2;
+const DEFAULT_CUTTER_DEPTH_PADDING_MM = 0.5;
+const MIN_PLANAR_CUTTER_DEPTH_MM = 0.1;
 let manifoldRuntimePromise = null;
 function nowMs() {
     if (typeof performance !== 'undefined' && typeof performance.now === 'function') {
@@ -125,13 +126,14 @@ function buildPlaneTransformMatrix(basis) {
         basis.anchor[0], basis.anchor[1], basis.anchor[2], 1,
     ];
 }
-function computeCutterDepthMm(strokeRadiusMm, options) {
+function computeCutterDepthMm(options) {
     if (options.cutterDepthMm > 0) {
         return options.cutterDepthMm;
     }
-    // Keep default edits local to the current anchor plane. The previous
-    // full-mesh span depth caused one stroke to leak into many anchors.
-    return Math.max(strokeRadiusMm * 2, options.cutterDepthPaddingMm * 2, 0.1);
+    // Keep default edits local to the current anchor plane.
+    // Depth is intentionally decoupled from stroke radius so large brushes
+    // don't leak into neighboring anchors.
+    return Math.max(options.cutterDepthPaddingMm * 2, MIN_PLANAR_CUTTER_DEPTH_MM);
 }
 function centerExtrusionAnchor(anchor, normal, depthMm) {
     const halfDepth = depthMm * 0.5;
@@ -336,14 +338,14 @@ export class ManifoldBrushEngine3D {
             sourceSolid = runtime.Manifold.ofMesh(sourceMeshObj);
             const polygons = brushStamps.map((polygon) => polygon.map((p) => [p.x, p.y]));
             brushCrossSection = runtime.CrossSection.compose(polygons);
-            const cutterDepthMm = computeCutterDepthMm(input.stroke.radiusMm, {
+            const cutterDepthMm = computeCutterDepthMm({
                 cutterDepthMm: this.options.cutterDepthMm,
                 cutterDepthPaddingMm: this.options.cutterDepthPaddingMm,
             });
             if (cutterDepthMm <= 0) {
                 throw new Error('invalid cutter depth');
             }
-            cutterLocal = brushCrossSection.extrude(cutterDepthMm, 0, 0, [1, 1], true);
+            cutterLocal = brushCrossSection.extrude(cutterDepthMm, 0, 0, [1, 1], false);
             const cutterBasis = {
                 ...basis,
                 anchor: centerExtrusionAnchor(basis.anchor, basis.normal, cutterDepthMm),

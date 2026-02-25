@@ -1,3 +1,4 @@
+import { BRUSH_PRECISION_MM } from './brush-types'
 import type { BrushMode, Segment2D, Vec2 } from './brush-types'
 // @ts-expect-error vite resolves wasm asset url from dependency path.
 import clipper2WasmUrl from 'clipper2-wasm/dist/es/clipper2z.wasm?url'
@@ -40,7 +41,7 @@ interface ClipperDInstance {
 }
 
 interface Clipper2Module {
-  FillRule: { NonZero: ClipperEnumValue }
+  FillRule: { NonZero: ClipperEnumValue; EvenOdd?: ClipperEnumValue }
   ClipType: { Union: ClipperEnumValue; Difference: ClipperEnumValue }
   JoinType: { Round: ClipperEnumValue }
   EndType: { Round: ClipperEnumValue }
@@ -81,7 +82,9 @@ export interface BrushClipper2D {
 const DEFAULT_PRECISION_DIGITS = 3
 const DEFAULT_MITER_LIMIT = 2
 const DEFAULT_ARC_TOLERANCE = 0
-const SEGMENT_KEY_SCALE = 1000
+const SEGMENT_KEY_EPSILON_MM = Math.max(0.001, BRUSH_PRECISION_MM * 0.01)
+const SEGMENT_KEY_SCALE = 1 / SEGMENT_KEY_EPSILON_MM
+const NEAR_CLOSED_GAP_MM = Math.max(0.02, BRUSH_PRECISION_MM * 0.5)
 const SINGLE_POINT_CIRCLE_STEPS = 24
 
 let clipper2ModulePromise: Promise<Clipper2Module> | null = null
@@ -110,6 +113,12 @@ function cloneVec2(p: Vec2): Vec2 {
   return { x: p.x, y: p.y }
 }
 
+function distanceSquared(a: Vec2, b: Vec2): number {
+  const dx = b.x - a.x
+  const dy = b.y - a.y
+  return dx * dx + dy * dy
+}
+
 function buildCirclePolygon(center: Vec2, radiusMm: number, steps = SINGLE_POINT_CIRCLE_STEPS): Vec2[] {
   const polygon: Vec2[] = []
   const n = Math.max(8, steps)
@@ -127,11 +136,14 @@ function pointKey(p: Vec2): string {
   return `${Math.round(p.x * SEGMENT_KEY_SCALE)},${Math.round(p.y * SEGMENT_KEY_SCALE)}`
 }
 
-function snapVec2(p: Vec2): Vec2 {
-  return {
-    x: Math.round(p.x * SEGMENT_KEY_SCALE) / SEGMENT_KEY_SCALE,
-    y: Math.round(p.y * SEGMENT_KEY_SCALE) / SEGMENT_KEY_SCALE,
-  }
+function comparePointKey(lhs: string, rhs: string): number {
+  if (lhs < rhs) return -1
+  if (lhs > rhs) return 1
+  return 0
+}
+
+function canonicalEdgeKey(aKey: string, bKey: string): string {
+  return comparePointKey(aKey, bKey) <= 0 ? `${aKey}|${bKey}` : `${bKey}|${aKey}`
 }
 
 function splitSegmentsForUnion(segments: Segment2D[]): {
@@ -145,25 +157,98 @@ function splitSegmentsForUnion(segments: Segment2D[]): {
     bKey: string
   }
 
+  type NodeAccum = {
+    sumX: number
+    sumY: number
+    count: number
+  }
+
   const edges: Edge[] = []
-  for (const seg of segments) {
-    const a = snapVec2(seg.a)
-    const b = snapVec2(seg.b)
-    edges.push({
-      a,
-      b,
-      aKey: pointKey(a),
-      bKey: pointKey(b),
+  const adjacency = new Map<string, number[]>()
+  const nodeAccum = new Map<string, NodeAccum>()
+  const seenUndirectedEdges = new Set<string>()
+
+  const appendAdjacency = (key: string, edgeIdx: number) => {
+    if (!adjacency.has(key)) adjacency.set(key, [])
+    adjacency.get(key)!.push(edgeIdx)
+  }
+
+  const accumulateNode = (key: string, point: Vec2) => {
+    const existing = nodeAccum.get(key)
+    if (existing) {
+      existing.sumX += point.x
+      existing.sumY += point.y
+      existing.count += 1
+      return
+    }
+    nodeAccum.set(key, {
+      sumX: point.x,
+      sumY: point.y,
+      count: 1,
     })
   }
 
-  const adjacency = new Map<string, number[]>()
-  for (let i = 0; i < edges.length; i++) {
-    const edge = edges[i]
-    if (!adjacency.has(edge.aKey)) adjacency.set(edge.aKey, [])
-    if (!adjacency.has(edge.bKey)) adjacency.set(edge.bKey, [])
-    adjacency.get(edge.aKey)!.push(i)
-    adjacency.get(edge.bKey)!.push(i)
+  for (const seg of segments) {
+    const a = cloneVec2(seg.a)
+    const b = cloneVec2(seg.b)
+    const aKey = pointKey(a)
+    const bKey = pointKey(b)
+    if (aKey === bKey) continue
+
+    const edgeKey = canonicalEdgeKey(aKey, bKey)
+    if (seenUndirectedEdges.has(edgeKey)) continue
+    seenUndirectedEdges.add(edgeKey)
+
+    const edgeIdx = edges.length
+    edges.push({ a, b, aKey, bKey })
+    appendAdjacency(aKey, edgeIdx)
+    appendAdjacency(bKey, edgeIdx)
+    accumulateNode(aKey, a)
+    accumulateNode(bKey, b)
+  }
+
+  const nodePoint = (key: string): Vec2 => {
+    const accum = nodeAccum.get(key)
+    if (!accum || accum.count <= 0) {
+      const [x, y] = key.split(',').map((value) => Number(value) / SEGMENT_KEY_SCALE)
+      return { x, y }
+    }
+    return {
+      x: accum.sumX / accum.count,
+      y: accum.sumY / accum.count,
+    }
+  }
+
+  const collectConnectedComponent = (seedEdgeIdx: number): {
+    edgeIndices: number[]
+    nodeKeys: string[]
+  } => {
+    const stack = [seedEdgeIdx]
+    const edgeSet = new Set<number>()
+    const nodeSet = new Set<string>()
+
+    while (stack.length > 0) {
+      const edgeIdx = stack.pop()!
+      if (edgeSet.has(edgeIdx)) continue
+      edgeSet.add(edgeIdx)
+
+      const edge = edges[edgeIdx]
+      nodeSet.add(edge.aKey)
+      nodeSet.add(edge.bKey)
+
+      for (const key of [edge.aKey, edge.bKey]) {
+        for (const nextEdgeIdx of adjacency.get(key) ?? []) {
+          if (!edgeSet.has(nextEdgeIdx)) {
+            stack.push(nextEdgeIdx)
+          }
+        }
+      }
+    }
+
+    return {
+      edgeIndices: Array.from(edgeSet),
+      nodeKeys: Array.from(nodeSet),
+    }
   }
 
   const visited = new Array(edges.length).fill(false)
@@ -172,62 +257,121 @@ function splitSegmentsForUnion(segments: Segment2D[]): {
 
   for (let i = 0; i < edges.length; i++) {
     if (visited[i]) continue
+    const component = collectConnectedComponent(i)
+    const componentEdgeSet = new Set(component.edgeIndices)
+    const degreeMap = new Map<string, number>()
+    for (const edgeIdx of component.edgeIndices) {
+      const edge = edges[edgeIdx]
+      degreeMap.set(edge.aKey, (degreeMap.get(edge.aKey) ?? 0) + 1)
+      degreeMap.set(edge.bKey, (degreeMap.get(edge.bKey) ?? 0) + 1)
+    }
 
-    const seed = edges[i]
-    visited[i] = true
+    const isPureClosedComponent = component.nodeKeys.length >= 3 &&
+      component.nodeKeys.every((key) => (degreeMap.get(key) ?? 0) === 2)
+    const oddNodeKeys = component.nodeKeys
+      .filter((key) => ((degreeMap.get(key) ?? 0) % 2) === 1)
+      .sort(comparePointKey)
+    const hasBranchNode = component.nodeKeys.some((key) => (degreeMap.get(key) ?? 0) > 2)
+    const isNearClosedComponent = !hasBranchNode &&
+      component.nodeKeys.length >= 3 &&
+      oddNodeKeys.length === 2 &&
+      distanceSquared(nodePoint(oddNodeKeys[0]), nodePoint(oddNodeKeys[1])) <= (NEAR_CLOSED_GAP_MM * NEAR_CLOSED_GAP_MM)
 
-    const startKey = seed.aKey
-    let previousKey = seed.aKey
-    let currentKey = seed.bKey
+    let closedLoopBuilt = false
+    if (isPureClosedComponent || isNearClosedComponent) {
+      const sortEdgeByOtherKey = (atKey: string) => (lhs: number, rhs: number): number => {
+        const lhsEdge = edges[lhs]
+        const rhsEdge = edges[rhs]
+        const lhsOther = lhsEdge.aKey === atKey ? lhsEdge.bKey : lhsEdge.aKey
+        const rhsOther = rhsEdge.aKey === atKey ? rhsEdge.bKey : rhsEdge.aKey
+        return comparePointKey(lhsOther, rhsOther)
+      }
 
-    const pathPoints: Vec2[] = [cloneVec2(seed.a), cloneVec2(seed.b)]
+      const componentAdjacency = (key: string): number[] =>
+        (adjacency.get(key) ?? []).filter((edgeIdx) => componentEdgeSet.has(edgeIdx))
 
-    while (true) {
-      if (currentKey === startKey) break
+      const startKey = isNearClosedComponent
+        ? oddNodeKeys[0]
+        : component.nodeKeys.slice().sort(comparePointKey)[0]
+      const terminalKey = isNearClosedComponent ? oddNodeKeys[1] : startKey
+      const startEdgeCandidates = componentAdjacency(startKey).slice().sort(sortEdgeByOtherKey(startKey))
 
-      const candidates = (adjacency.get(currentKey) ?? []).filter((edgeIdx) => !visited[edgeIdx])
-      if (candidates.length === 0) break
+      if (startEdgeCandidates.length > 0) {
+        const localVisited = new Set<number>()
+        const pathKeys: string[] = [startKey]
+        let currentKey = startKey
+        let previousKey: string | null = null
+        let currentEdgeIdx = startEdgeCandidates[0]
+        const maxSteps = component.edgeIndices.length
 
-      let nextEdgeIdx = candidates[0]
-      if (candidates.length > 1) {
-        const nonBacktrack = candidates.find((edgeIdx) => {
-          const edge = edges[edgeIdx]
-          const otherKey = edge.aKey === currentKey ? edge.bKey : edge.aKey
-          return otherKey !== previousKey
-        })
-        if (nonBacktrack !== undefined) {
-          nextEdgeIdx = nonBacktrack
+        for (let step = 0; step < maxSteps; step++) {
+          if (localVisited.has(currentEdgeIdx)) break
+          localVisited.add(currentEdgeIdx)
+
+          const edge = edges[currentEdgeIdx]
+          const nextKey = edge.aKey === currentKey ? edge.bKey : edge.aKey
+          pathKeys.push(nextKey)
+          previousKey = currentKey
+          currentKey = nextKey
+
+          if (localVisited.size === component.edgeIndices.length) {
+            break
+          }
+
+          const nextCandidates = componentAdjacency(currentKey)
+            .filter((edgeIdx) => !localVisited.has(edgeIdx))
+            .sort((lhs, rhs) => {
+              const lhsEdge = edges[lhs]
+              const rhsEdge = edges[rhs]
+              const lhsOther = lhsEdge.aKey === currentKey ? lhsEdge.bKey : lhsEdge.aKey
+              const rhsOther = rhsEdge.aKey === currentKey ? rhsEdge.bKey : rhsEdge.aKey
+              const lhsIsBacktrack = lhsOther === previousKey ? 1 : 0
+              const rhsIsBacktrack = rhsOther === previousKey ? 1 : 0
+              if (lhsIsBacktrack !== rhsIsBacktrack) {
+                return lhsIsBacktrack - rhsIsBacktrack
+              }
+              return comparePointKey(lhsOther, rhsOther)
+            })
+
+          if (nextCandidates.length === 0) break
+          currentEdgeIdx = nextCandidates[0]
+        }
+
+        const consumedAllEdges = localVisited.size === component.edgeIndices.length
+        const reachedTerminal = currentKey === terminalKey
+        const closedPathKeys = isNearClosedComponent
+          ? [...pathKeys, startKey]
+          : pathKeys
+        const closed = consumedAllEdges &&
+          reachedTerminal &&
+          closedPathKeys[closedPathKeys.length - 1] === startKey &&
+          closedPathKeys.length >= 4
+        if (closed) {
+          const polygon = closedPathKeys.slice(0, closedPathKeys.length - 1).map((key) => nodePoint(key))
+          if (polygon.length >= 3) {
+            closedLoops.push(polygon)
+            for (const edgeIdx of localVisited) {
+              visited[edgeIdx] = true
+            }
+            closedLoopBuilt = true
+          }
         }
       }
-
-      const nextEdge = edges[nextEdgeIdx]
-      visited[nextEdgeIdx] = true
-
-      const nextKey = nextEdge.aKey === currentKey ? nextEdge.bKey : nextEdge.aKey
-      const nextPoint = nextEdge.aKey === currentKey ? nextEdge.b : nextEdge.a
-
-      pathPoints.push(cloneVec2(nextPoint))
-      previousKey = currentKey
-      currentKey = nextKey
     }
 
-    const closed = currentKey === startKey && pathPoints.length >= 4
-    if (closed) {
-      const firstKey = pointKey(pathPoints[0])
-      const lastKey = pointKey(pathPoints[pathPoints.length - 1])
-      if (firstKey === lastKey) {
-        pathPoints.pop()
+    if (closedLoopBuilt) {
+      for (const edgeIdx of component.edgeIndices) {
+        visited[edgeIdx] = true
       }
-      if (pathPoints.length >= 3) {
-        closedLoops.push(pathPoints)
-        continue
-      }
+      continue
     }
 
-    for (let j = 0; j < pathPoints.length - 1; j++) {
+    for (const edgeIdx of component.edgeIndices) {
+      visited[edgeIdx] = true
+      const edge = edges[edgeIdx]
       openSegments.push({
-        a: cloneVec2(pathPoints[j]),
-        b: cloneVec2(pathPoints[j + 1]),
+        a: cloneVec2(edge.a),
+        b: cloneVec2(edge.b),
       })
     }
   }
@@ -275,6 +419,7 @@ class Clipper2WasmBrushAdapter implements BrushClipper2D {
   private readonly precisionDigits: number
   private readonly miterLimit: number
   private readonly arcTolerance: number
+  private readonly booleanFillRule: ClipperEnumValue
 
   constructor(
     private readonly module: Clipper2Module,
@@ -283,6 +428,9 @@ class Clipper2WasmBrushAdapter implements BrushClipper2D {
     this.precisionDigits = options.precisionDigits ?? DEFAULT_PRECISION_DIGITS
     this.miterLimit = options.miterLimit ?? DEFAULT_MITER_LIMIT
     this.arcTolerance = options.arcTolerance ?? DEFAULT_ARC_TOLERANCE
+    // Prefer EvenOdd to keep hole semantics stable even when loop winding
+    // gets rebuilt from unordered slice segments after view switching.
+    this.booleanFillRule = this.module.FillRule.EvenOdd ?? this.module.FillRule.NonZero
   }
 
   inflateStrokeToPolygon(strokePoints: Vec2[], radiusMm: number): Vec2[] {
@@ -368,7 +516,7 @@ class Clipper2WasmBrushAdapter implements BrushClipper2D {
 
       const succeeded = clipper.ExecutePath(
         this.module.ClipType.Union,
-        this.module.FillRule.NonZero,
+        this.booleanFillRule,
         closedSolution,
         openSolution,
       )
@@ -417,7 +565,7 @@ class Clipper2WasmBrushAdapter implements BrushClipper2D {
 
       const succeeded = clipper.ExecutePath(
         this.module.ClipType.Difference,
-        this.module.FillRule.NonZero,
+        this.booleanFillRule,
         closedSolution,
         openSolution,
       )

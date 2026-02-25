@@ -169,6 +169,9 @@ class Clipper2WasmBrushAdapter {
         this.precisionDigits = options.precisionDigits ?? DEFAULT_PRECISION_DIGITS;
         this.miterLimit = options.miterLimit ?? DEFAULT_MITER_LIMIT;
         this.arcTolerance = options.arcTolerance ?? DEFAULT_ARC_TOLERANCE;
+        // Prefer EvenOdd to keep hole semantics stable even when loop winding
+        // gets rebuilt from unordered slice segments after view switching.
+        this.booleanFillRule = this.module.FillRule.EvenOdd ?? this.module.FillRule.NonZero;
     }
     inflateStrokeToPolygon(strokePoints, radiusMm) {
         if (strokePoints.length === 0 || radiusMm <= 0)
@@ -236,7 +239,7 @@ class Clipper2WasmBrushAdapter {
                 clipper.AddOpenSubject(openSubject);
             }
             clipper.AddClip(clipPaths);
-            const succeeded = clipper.ExecutePath(this.module.ClipType.Union, this.module.FillRule.NonZero, closedSolution, openSolution);
+            const succeeded = clipper.ExecutePath(this.module.ClipType.Union, this.booleanFillRule, closedSolution, openSolution);
             if (!succeeded) {
                 throw new Error('Clipper2 union ExecutePath failed');
             }
@@ -275,7 +278,7 @@ class Clipper2WasmBrushAdapter {
                 clipper.AddOpenSubject(openSubject);
             }
             clipper.AddClip(clipPaths);
-            const succeeded = clipper.ExecutePath(this.module.ClipType.Difference, this.module.FillRule.NonZero, closedSolution, openSolution);
+            const succeeded = clipper.ExecutePath(this.module.ClipType.Difference, this.booleanFillRule, closedSolution, openSolution);
             if (!succeeded) {
                 throw new Error('Clipper2 difference ExecutePath failed');
             }

@@ -338,4 +338,54 @@ describe('DefaultBrushSession', () => {
     expect(session.currentState).toBe('drawing')
   })
 
+  it('resliceIfNeeded should recover invalidated session and allow next stroke', async () => {
+    const previewEngine: BrushEngine2D = {
+      preview(input) {
+        return {
+          nextSegments: input.baseSegments,
+          dirtyBoundsMm: { minX: 0, minY: 0, maxX: 0, maxY: 0 },
+          stats: { segmentCount: input.baseSegments.length, elapsedMs: 0 },
+        }
+      },
+    }
+
+    const commitEngine: BrushEngine3D = {
+      async commit(input: CommitInput): Promise<CommitOutput> {
+        return {
+          newMeshId: `${input.meshId}:ok`,
+          mesh: input.mesh,
+          triangleCount: input.mesh.indices.length / 3,
+          elapsedMs: 0,
+        }
+      },
+    }
+
+    let resliceCalls = 0
+    const session = new DefaultBrushSession([seg(0, 0, 1, 0)], {
+      previewEngine,
+      commitEngine,
+      requestReslice: async () => {
+        resliceCalls += 1
+        return [seg(10, 0, 11, 0)]
+      },
+      createCommitInput: () => ({
+        meshId: 'mesh-1',
+        mesh: makeMesh(),
+        slicePlane: { normal: [0, 0, 1], anchor: [0, 0, 0] },
+      }),
+    })
+
+    session.invalidate('cameraRotate')
+    expect(session.currentState).toBe('invalidated')
+
+    await session.resliceIfNeeded()
+
+    expect(resliceCalls).toBe(1)
+    expect(session.currentState).toBe('idle')
+    expect(session.getCurrentSegments()).toEqual([seg(10, 0, 11, 0)])
+
+    session.beginStroke({ x: 0, y: 0 }, 2, 'add')
+    expect(session.currentState).toBe('drawing')
+  })
+
 })

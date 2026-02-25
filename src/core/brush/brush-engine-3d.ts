@@ -44,7 +44,8 @@ interface ManifoldMeshData {
 const EPSILON = 1e-9
 const DEFAULT_BRUSH_CONTOUR_POINTS = 40
 const MIN_BRUSH_CONTOUR_POINTS = 12
-const DEFAULT_CUTTER_DEPTH_PADDING_MM = 2
+const DEFAULT_CUTTER_DEPTH_PADDING_MM = 0.5
+const MIN_PLANAR_CUTTER_DEPTH_MM = 0.1
 
 let manifoldRuntimePromise: Promise<ManifoldToplevel> | null = null
 
@@ -188,17 +189,15 @@ function buildPlaneTransformMatrix(basis: PlaneBasis): [
   ]
 }
 
-function computeCutterDepthMm(
-  strokeRadiusMm: number,
-  options: { cutterDepthMm: number; cutterDepthPaddingMm: number },
-): number {
+function computeCutterDepthMm(options: { cutterDepthMm: number; cutterDepthPaddingMm: number }): number {
   if (options.cutterDepthMm > 0) {
     return options.cutterDepthMm
   }
 
-  // Keep default edits local to the current anchor plane. The previous
-  // full-mesh span depth caused one stroke to leak into many anchors.
-  return Math.max(strokeRadiusMm * 2, options.cutterDepthPaddingMm * 2, 0.1)
+  // Keep default edits local to the current anchor plane.
+  // Depth is intentionally decoupled from stroke radius so large brushes
+  // don't leak into neighboring anchors.
+  return Math.max(options.cutterDepthPaddingMm * 2, MIN_PLANAR_CUTTER_DEPTH_MM)
 }
 
 function centerExtrusionAnchor(anchor: Vec3, normal: Vec3, depthMm: number): Vec3 {
@@ -454,13 +453,10 @@ export class ManifoldBrushEngine3D implements BrushEngine3D {
       const polygons = brushStamps.map((polygon) => polygon.map((p) => [p.x, p.y] as [number, number]))
       brushCrossSection = runtime.CrossSection.compose(polygons)
 
-      const cutterDepthMm = computeCutterDepthMm(
-        input.stroke.radiusMm,
-        {
-          cutterDepthMm: this.options.cutterDepthMm,
-          cutterDepthPaddingMm: this.options.cutterDepthPaddingMm,
-        },
-      )
+      const cutterDepthMm = computeCutterDepthMm({
+        cutterDepthMm: this.options.cutterDepthMm,
+        cutterDepthPaddingMm: this.options.cutterDepthPaddingMm,
+      })
       if (cutterDepthMm <= 0) {
         throw new Error('invalid cutter depth')
       }

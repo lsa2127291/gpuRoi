@@ -52,6 +52,8 @@ let updateToken = 0
 let navigationLocked = false
 let pointerDown = false
 let lastPointerLocalMm: Vec2 | null = null
+let pendingStrokeStartPoint: Vec2 | null = null
+let recoverStrokePromise: Promise<void> | null = null
 
 let currentMesh = createTestCube()
 let currentMeshId = 'mesh-0'
@@ -232,6 +234,58 @@ async function main() {
   const allButtons = [btnAxial, btnSagittal, btnCoronal, btnCustom]
   const viewNames = ['Axial', 'Sagittal', 'Coronal', 'Custom']
 
+  function beginInteractiveStroke(localPoint: Vec2): void {
+    if (brushSession.currentState !== 'idle') return
+
+    try {
+      brushSession.beginStroke(localPoint, brushRadiusMm, brushMode)
+      const preview = brushSession.appendPoint(localPoint)
+      if (preview) {
+        overlayRenderer.renderPreview(
+          preview.nextSegments,
+          preview.brushPolygon2D ?? [],
+          brushMode,
+        )
+      }
+      overlayRenderer.renderCursor(localPoint, brushRadiusMm, brushMode)
+      setNavigationLock(true)
+    } catch (err) {
+      pointerDown = false
+      pendingStrokeStartPoint = null
+      console.error('Begin stroke failed:', err)
+    }
+  }
+
+  async function recoverSliceAndStartStrokeIfPending(): Promise<void> {
+    if (recoverStrokePromise) {
+      await recoverStrokePromise
+      return
+    }
+
+    recoverStrokePromise = (async () => {
+      try {
+        await brushSession.resliceIfNeeded()
+        overlayRenderer.renderCommittedActive(brushSession.getCurrentSegments())
+
+        if (!pointerDown || !pendingStrokeStartPoint) return
+        const point = pendingStrokeStartPoint
+        pendingStrokeStartPoint = null
+        beginInteractiveStroke(point)
+      } catch (error) {
+        console.error('Recover brush state failed:', error)
+      }
+    })()
+
+    try {
+      await recoverStrokePromise
+    } finally {
+      recoverStrokePromise = null
+      if (!pointerDown) {
+        pendingStrokeStartPoint = null
+      }
+    }
+  }
+
   function switchView(viewName: string): void {
     if (navigationLocked) return
 
@@ -317,33 +371,39 @@ async function main() {
   })
 
   canvas.addEventListener('mousedown', (event) => {
-    if (brushSession.currentState !== 'idle') return
+    if (navigationLocked) return
 
-    pointerDown = true
     const localPoint = canvasToLocalMm(event)
     lastPointerLocalMm = localPoint
+    pointerDown = true
 
-    try {
-      brushSession.beginStroke(localPoint, brushRadiusMm, brushMode)
-      const preview = brushSession.appendPoint(localPoint)
-      if (preview) {
-        overlayRenderer.renderPreview(
-          preview.nextSegments,
-          preview.brushPolygon2D ?? [],
-          brushMode,
-        )
-      }
+    if (brushSession.currentState === 'invalidated') {
+      pendingStrokeStartPoint = localPoint
+      overlayRenderer.renderCommittedActive(brushSession.getCurrentSegments())
       overlayRenderer.renderCursor(localPoint, brushRadiusMm, brushMode)
-      setNavigationLock(true)
-    } catch (err) {
-      pointerDown = false
-      console.error('Begin stroke failed:', err)
+      void recoverSliceAndStartStrokeIfPending()
+      return
     }
+
+    if (brushSession.currentState !== 'idle') {
+      pointerDown = false
+      return
+    }
+
+    pendingStrokeStartPoint = null
+    beginInteractiveStroke(localPoint)
   })
 
   canvas.addEventListener('pointermove', (event) => {
     const localPoint = canvasToLocalMm(event)
     lastPointerLocalMm = localPoint
+
+    if (pointerDown && pendingStrokeStartPoint && brushSession.currentState !== 'drawing') {
+      pendingStrokeStartPoint = localPoint
+      overlayRenderer.renderCommittedActive(brushSession.getCurrentSegments())
+      overlayRenderer.renderCursor(localPoint, brushRadiusMm, brushMode)
+      return
+    }
 
     if (brushSession.currentState === 'drawing' && pointerDown) {
       // Use coalesced events for higher-resolution sampling during strokes
@@ -378,6 +438,16 @@ async function main() {
   window.addEventListener('mouseup', (event) => {
     if (!pointerDown) return
 
+    if (pendingStrokeStartPoint && brushSession.currentState !== 'drawing') {
+      pointerDown = false
+      pendingStrokeStartPoint = null
+      const localPoint = canvasToLocalMm(event)
+      lastPointerLocalMm = localPoint
+      overlayRenderer.renderCommittedActive(brushSession.getCurrentSegments())
+      overlayRenderer.renderCursor(localPoint, brushRadiusMm, brushMode)
+      return
+    }
+
     if (brushSession.currentState === 'drawing') {
       const localPoint = canvasToLocalMm(event)
       lastPointerLocalMm = localPoint
@@ -393,6 +463,7 @@ async function main() {
     }
 
     pointerDown = false
+    pendingStrokeStartPoint = null
     void commitCurrentStroke()
   })
 
@@ -404,6 +475,7 @@ async function main() {
       overlayRenderer.renderCommittedActive(brushSession.getCurrentSegments())
       setNavigationLock(false)
       pointerDown = false
+      pendingStrokeStartPoint = null
     }
   })
 
