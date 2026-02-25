@@ -2,7 +2,7 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** 将纯圆柱笔刷 slab 替换为带锥度的形状，线性过渡到相邻层轮廓，消除 sagittal/coronal 视图的锯齿。
+**Goal:** 将纯圆柱笔刷 slab 替换为带锥度的形状，线性过渡到相邻层轮廓，使当前视图的勾画在其他视图不产生锯齿。
 
 **Architecture:** 修改 `ManifoldBrushEngine3D.commit()` — 用"差集锥体法"构建锥度 cutter：将当前层与相邻层截面分解为共有部分（交集，平直延伸）、当前层独有（差集，锥形收缩）、相邻层独有（差集，锥形扩张），三者 union 形成精准的线性过渡。commit 后同步回溯更新相邻层。
 

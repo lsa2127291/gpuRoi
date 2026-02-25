@@ -57,3 +57,15 @@
 - 差异检测口径（`bench`）：
   - 当前比较的是像素 alpha mask（显示一致性），不是几何拓扑一致性。
   - 若要验证几何一致性，请优先比较 `Single` 与 `sliceBatchFlat` 的线段结果。
+
+## Brush 方案现状（按 `src/core/brush/brush-example.ts` 思路落地）
+- 2D 预览使用“圆刷/胶囊刷逐段 stamp + Clipper2 布尔”，不是旧的扫描线流程。
+- `brushContourPoints` 当前固定默认 `40`（可配置），用于圆刷/胶囊轮廓采样。
+- `erase` 必须按“面差集”语义处理闭环：
+  - 闭环轮廓：`AddSubject + Difference`
+  - 开口线段：`AddOpenSubject + Difference`
+  - 输出合并闭环与开口结果，避免仅出现“边断开”。
+- `DefaultBrushEngine2D` 为无 fallback 模式：必须提供 `clipperAdapter`；Clipper 执行失败直接抛错。
+- `BrushSession.appendPoint` 使用增量预览（首帧后仅处理最后两点），并跳过 no-op 点，避免长笔画卡顿。
+- `BrushSession` 在 `invalidated` 状态收到 `setBaseSegments` 后会自动回到 `idle`，切视角/改 anchor 后可继续勾画。
+- Demo 当前也是无 fallback：仅支持 WebGPU Batch + Clipper2 预览路径。
